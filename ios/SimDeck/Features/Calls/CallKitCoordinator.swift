@@ -38,6 +38,7 @@ final class CallKitCoordinator: NSObject, CallStarting, CallControlling, Incomin
     @ObservationIgnored private var locallyEndedCallIDs: Set<UUID> = []
     @ObservationIgnored private var historyContexts: [UUID: CallHistoryContext] = [:]
     @ObservationIgnored private var allowsInAppCallUI = false
+    @ObservationIgnored private var applicationIsActive = true
     @ObservationIgnored private var historyHandler: (@MainActor (CallRecord) -> Void)?
     @ObservationIgnored private let now: () -> Date
 
@@ -171,10 +172,10 @@ final class CallKitCoordinator: NSObject, CallStarting, CallControlling, Incomin
             status: .ringing,
             isMuted: false
         )
-        allowsInAppCallUI = false
-        // Incoming calls are presented and controlled by the system CallKit
-        // surface, including when the user answers from the lock screen.
-        showsInAppCallUI = false
+        // Keep the app call surface available while the app is active. When
+        // the app is backgrounded, CallKit remains the system call surface.
+        allowsInAppCallUI = true
+        showsInAppCallUI = applicationIsActive
         historyContexts[call.callID] = CallHistoryContext(
             lineID: call.lineID,
             remoteNumber: call.remoteNumber,
@@ -374,6 +375,7 @@ final class CallKitCoordinator: NSObject, CallStarting, CallControlling, Incomin
     }
 
     func setApplicationActive(_ isActive: Bool) {
+        applicationIsActive = isActive
         showsInAppCallUI = allowsInAppCallUI && isActive && activeCall != nil
     }
 

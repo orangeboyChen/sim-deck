@@ -186,6 +186,7 @@ struct SimDeckApp: App {
                 }
             }
                 .task {
+                    model.callCoordinator.setApplicationActive(scenePhase == .active)
                     NotificationPreferences.migrateToSharedDefaults()
                     model.refreshContactNames()
                     model.startContactUpdates()

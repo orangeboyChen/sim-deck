@@ -452,7 +452,7 @@ final class CallLifecycleTests: XCTestCase {
         XCTAssertEqual(provider.incomingUpdate?.supportsHolding, true)
         XCTAssertEqual(provider.incomingUpdate?.supportsDTMF, true)
         XCTAssertEqual(coordinator.activeCall?.status, .ringing)
-        XCTAssertFalse(coordinator.showsInAppCallUI)
+        XCTAssertTrue(coordinator.showsInAppCallUI)
         XCTAssertEqual(coordinator.activeCall?.lineID, call.lineID)
         XCTAssertEqual(transport.registeredIncomingCalls.first?.callSecret, call.callSecret)
         XCTAssertEqual(
@@ -465,6 +465,23 @@ final class CallLifecycleTests: XCTestCase {
                 )
             ]
         )
+    }
+
+    func testIncomingCallPresentationFollowsApplicationState() async throws {
+        let provider = RecordingSystemCallProvider()
+        let coordinator = CallKitCoordinator(
+            transport: RecordingCallTransport(),
+            provider: provider,
+            integratesWithSystem: false
+        )
+        let call = makeIncomingCall(contactName: nil)
+
+        coordinator.setApplicationActive(false)
+        try await coordinator.reportIncomingCall(call)
+        XCTAssertFalse(coordinator.showsInAppCallUI)
+
+        coordinator.setApplicationActive(true)
+        XCTAssertTrue(coordinator.showsInAppCallUI)
     }
 
     func testIncomingCallReportFailureClearsVisibleCall() async {
