@@ -56,13 +56,6 @@ final class CallLifecycleTests: XCTestCase {
             [.init(callID: callID, remoteNumber: "10086", lineID: lineID)]
         )
         XCTAssertEqual(coordinator.activeCall?.status, .active(connectedAt: transport.connectedAt))
-        XCTAssertTrue(coordinator.showsInAppCallUI)
-
-        coordinator.setApplicationActive(false)
-        XCTAssertFalse(coordinator.showsInAppCallUI)
-        coordinator.setApplicationActive(true)
-        XCTAssertTrue(coordinator.showsInAppCallUI)
-
         try await coordinator.setMuted(true)
         try await coordinator.setHeld(true)
         try await coordinator.playDTMF("8")
@@ -77,7 +70,6 @@ final class CallLifecycleTests: XCTestCase {
 
         XCTAssertEqual(transport.endedCallIDs, [callID])
         XCTAssertNil(coordinator.activeCall)
-        XCTAssertFalse(coordinator.showsInAppCallUI)
     }
 
     func testCompletedOutgoingCallIsAddedToAppHistory() async throws {
@@ -407,9 +399,6 @@ final class CallLifecycleTests: XCTestCase {
         XCTAssertTrue(didFulfill)
         XCTAssertFalse(didFail)
         XCTAssertEqual(coordinator.activeCall?.status, .ringing)
-        XCTAssertTrue(coordinator.showsInAppCallUI)
-        coordinator.setApplicationActive(false)
-        XCTAssertFalse(coordinator.showsInAppCallUI)
         for _ in 0..<10 where !transport.isStartPending {
             await Task.yield()
         }
@@ -452,7 +441,6 @@ final class CallLifecycleTests: XCTestCase {
         XCTAssertEqual(provider.incomingUpdate?.supportsHolding, true)
         XCTAssertEqual(provider.incomingUpdate?.supportsDTMF, true)
         XCTAssertEqual(coordinator.activeCall?.status, .ringing)
-        XCTAssertTrue(coordinator.showsInAppCallUI)
         XCTAssertEqual(coordinator.activeCall?.lineID, call.lineID)
         XCTAssertEqual(transport.registeredIncomingCalls.first?.callSecret, call.callSecret)
         XCTAssertEqual(
@@ -465,23 +453,6 @@ final class CallLifecycleTests: XCTestCase {
                 )
             ]
         )
-    }
-
-    func testIncomingCallPresentationFollowsApplicationState() async throws {
-        let provider = RecordingSystemCallProvider()
-        let coordinator = CallKitCoordinator(
-            transport: RecordingCallTransport(),
-            provider: provider,
-            integratesWithSystem: false
-        )
-        let call = makeIncomingCall(contactName: nil)
-
-        coordinator.setApplicationActive(false)
-        try await coordinator.reportIncomingCall(call)
-        XCTAssertFalse(coordinator.showsInAppCallUI)
-
-        coordinator.setApplicationActive(true)
-        XCTAssertTrue(coordinator.showsInAppCallUI)
     }
 
     func testIncomingCallReportFailureClearsVisibleCall() async {

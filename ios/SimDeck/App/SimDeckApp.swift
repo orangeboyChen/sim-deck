@@ -186,7 +186,6 @@ struct SimDeckApp: App {
                 }
             }
                 .task {
-                    model.callCoordinator.setApplicationActive(scenePhase == .active)
                     NotificationPreferences.migrateToSharedDefaults()
                     model.refreshContactNames()
                     model.startContactUpdates()
@@ -211,7 +210,6 @@ struct SimDeckApp: App {
                     model.startRealtimeUpdates()
                 }
                 .onChange(of: scenePhase) { _, phase in
-                    model.callCoordinator.setApplicationActive(phase == .active)
                     guard shouldStartLiveServices else { return }
                     if phase == .active {
                         Task {
