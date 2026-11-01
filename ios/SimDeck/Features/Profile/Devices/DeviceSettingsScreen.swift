@@ -141,7 +141,7 @@ struct SIMSettingsScreen: View {
     @State private var numericID: Int
     @State private var lineName: String
     @State private var phoneNumber: String
-    @State private var errorDescription: String?
+    @State private var saveErrorDescription: String?
     @State private var controlErrorDescription: String?
     @State private var slotSettings: SlotSettings?
     @State private var originalSlotSettings: SlotSettings?
@@ -209,9 +209,6 @@ struct SIMSettingsScreen: View {
             Section("MMS") {
                 NavigationLink("MMS Configuration") { MMSSettingsScreen() }
             }
-            if let errorDescription {
-                Section { Label(errorDescription, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
-            }
         }
         .navigationTitle("SIM Card")
         .navigationBarTitleDisplayMode(.inline)
@@ -243,6 +240,14 @@ struct SIMSettingsScreen: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("VoLTE changes require a modem restart. Restarting temporarily takes this SIM offline.")
+        }
+        .alert("Unable to Save SIM", isPresented: Binding(
+            get: { saveErrorDescription != nil },
+            set: { if !$0 { saveErrorDescription = nil } }
+        )) {
+            Button("OK", role: .cancel) { saveErrorDescription = nil }
+        } message: {
+            Text(saveErrorDescription ?? "")
         }
         .scrollEdgeEffectStyle(.soft, for: .all)
     }
@@ -287,7 +292,7 @@ struct SIMSettingsScreen: View {
     private func save(restartModem: Bool) {
         Task {
             isWorking = true
-            errorDescription = nil
+            saveErrorDescription = nil
             do {
                 try await model.saveSIM(line: line, numericID: numericID, lineName: lineName, phoneNumber: phoneNumber)
                 if let slotSettings, slotSettings != originalSlotSettings {
@@ -298,7 +303,7 @@ struct SIMSettingsScreen: View {
                 }
                 dismiss()
             } catch {
-                errorDescription = error.localizedDescription
+                saveErrorDescription = error.localizedDescription
                 isWorking = false
             }
         }
