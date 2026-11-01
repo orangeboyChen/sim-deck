@@ -75,11 +75,11 @@ func (controller *Controller) Current() Settings {
 	return controller.settings
 }
 
-// Restore reapplies the persisted radio policy after modem initialization.
+// Restore reapplies the persisted airplane policy after modem initialization.
 func (controller *Controller) Restore(ctx context.Context) error {
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
-	return controller.applyRadio(ctx, controller.settings, true, true)
+	return controller.applyRadio(ctx, controller.settings, true)
 }
 
 // Configure applies a partial update and returns the resulting effective policy.
@@ -89,6 +89,8 @@ func (controller *Controller) Configure(ctx context.Context, update Update) (Set
 	previous := controller.settings
 	next := previous
 	if update.DataEnabled != nil {
+		// The device does not open a SIM data session. Detaching packet service
+		// here would also disconnect IMS and break VoLTE calls.
 		next.DataEnabled = *update.DataEnabled
 	}
 	if update.AirplaneModeEnabled != nil {
@@ -108,12 +110,7 @@ func (controller *Controller) Configure(ctx context.Context, update Update) (Set
 			return previous, err
 		}
 	}
-	if err := controller.applyRadio(
-		ctx,
-		next,
-		previous.AirplaneModeEnabled != next.AirplaneModeEnabled,
-		previous.DataEnabled != next.DataEnabled,
-	); err != nil {
+	if err := controller.applyRadio(ctx, next, previous.AirplaneModeEnabled != next.AirplaneModeEnabled); err != nil {
 		return previous, err
 	}
 	if next == previous {
@@ -141,7 +138,7 @@ func (controller *Controller) applyVoLTE(ctx context.Context, enabled bool) erro
 	return controller.send(ctx, `AT+QCFG="ims",`+value)
 }
 
-func (controller *Controller) applyRadio(ctx context.Context, settings Settings, airplaneChanged bool, dataChanged bool) error {
+func (controller *Controller) applyRadio(ctx context.Context, settings Settings, airplaneChanged bool) error {
 	if settings.AirplaneModeEnabled {
 		if airplaneChanged {
 			return controller.send(ctx, "AT+CFUN=0")
@@ -149,17 +146,7 @@ func (controller *Controller) applyRadio(ctx context.Context, settings Settings,
 		return nil
 	}
 	if airplaneChanged {
-		if err := controller.send(ctx, "AT+CFUN=1"); err != nil {
-			return err
-		}
-		dataChanged = true
-	}
-	if dataChanged {
-		value := "0"
-		if settings.DataEnabled {
-			value = "1"
-		}
-		return controller.send(ctx, "AT+CGATT="+value)
+		return controller.send(ctx, "AT+CFUN=1")
 	}
 	return nil
 }

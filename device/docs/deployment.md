@@ -10,6 +10,13 @@ The modem containers and the iPhone both connect outbound to `relay-control`.
 The iPhone does not connect to a modem host and does not need a modem IP, USB
 path, device UUID, SIM ICCID, or pairing token.
 
+The device container uses the host's normal network route for server HTTPS and
+TURN media. The modem supplies cellular voice and audio; the agent does not
+start a SIM data connection. The Mobile Data slot preference is retained for
+future data features and does not detach packet service, which VoLTE needs for
+IMS registration. If the host has multiple uplinks, configure its routes so
+the intended external connection reaches the server and TURN host.
+
 ## Before plugging in the modem
 
 Prepare:

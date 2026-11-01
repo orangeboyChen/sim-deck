@@ -108,7 +108,7 @@ var _ = Describe("Slot policy controller", func() {
 		Expect(controller.Current().VoLTEEnabled).To(BeFalse())
 	})
 
-	It("applies airplane and data changes in modem-safe order", func() {
+	It("does not apply the data preference when leaving airplane mode", func() {
 		controller, err := NewController(directory, commander, time.Second)
 		Expect(err).NotTo(HaveOccurred())
 		enabled, disabled := true, false
@@ -118,10 +118,10 @@ var _ = Describe("Slot policy controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, err = controller.Configure(context.Background(), Update{AirplaneModeEnabled: &disabled})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(commander.commands).To(Equal([]string{"AT+CFUN=0", "AT+CFUN=1", "AT+CGATT=0"}))
+		Expect(commander.commands).To(Equal([]string{"AT+CFUN=0", "AT+CFUN=1"}))
 	})
 
-	It("restores persisted radio state after modem initialization", func() {
+	It("restores airplane state without detaching packet service", func() {
 		controller, err := NewController(directory, commander, time.Second)
 		Expect(err).NotTo(HaveOccurred())
 		disabled := false
@@ -129,19 +129,21 @@ var _ = Describe("Slot policy controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 		commander.commands = nil
 		Expect(controller.Restore(context.Background())).To(Succeed())
-		Expect(commander.commands).To(Equal([]string{"AT+CFUN=1", "AT+CGATT=0"}))
+		Expect(commander.commands).To(Equal([]string{"AT+CFUN=1"}))
 	})
 
-	It("does not persist a radio change rejected by the modem", func() {
+	It("persists the data preference without sending a modem command", func() {
 		controller, err := NewController(directory, commander, time.Second)
 		Expect(err).NotTo(HaveOccurred())
 		commander.err = errors.New("serial unavailable")
 		disabled := false
-		_, err = controller.Configure(context.Background(), Update{DataEnabled: &disabled})
-		Expect(err).To(MatchError(ContainSubstring("serial unavailable")))
-		Expect(controller.Current().DataEnabled).To(BeTrue())
-		_, statError := os.Stat(filepath.Join(directory, "slot-policy.json"))
-		Expect(statError).To(MatchError(os.ErrNotExist))
+		settings, err := controller.Configure(context.Background(), Update{DataEnabled: &disabled})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.DataEnabled).To(BeFalse())
+		Expect(commander.commands).To(BeEmpty())
+		reloaded, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reloaded.Current()).To(Equal(settings))
 	})
 
 	It("does not rewrite state or touch the modem for an unchanged policy", func() {
@@ -162,17 +164,17 @@ var _ = Describe("Slot policy controller", func() {
 		Expect(statError).To(MatchError(os.ErrNotExist))
 	})
 
-	It("surfaces a modem terminal rejection without changing the saved policy", func() {
+	It("surfaces an airplane mode rejection without changing the saved policy", func() {
 		controller, err := NewController(directory, commander, time.Second)
 		Expect(err).NotTo(HaveOccurred())
 		commander.response = at.Response{Terminal: "ERROR"}
-		disabled := false
+		enabled := true
 
-		settings, err := controller.Configure(context.Background(), Update{DataEnabled: &disabled})
+		settings, err := controller.Configure(context.Background(), Update{AirplaneModeEnabled: &enabled})
 
-		Expect(err).To(MatchError("modem rejected slot policy command AT+CGATT=0: ERROR"))
-		Expect(settings.DataEnabled).To(BeTrue())
-		Expect(controller.Current().DataEnabled).To(BeTrue())
+		Expect(err).To(MatchError("modem rejected slot policy command AT+CFUN=0: ERROR"))
+		Expect(settings.AirplaneModeEnabled).To(BeFalse())
+		Expect(controller.Current().AirplaneModeEnabled).To(BeFalse())
 	})
 
 	It("persists data preference changes while airplane mode keeps the radio disabled", func() {
