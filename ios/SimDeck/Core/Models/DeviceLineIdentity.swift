@@ -31,7 +31,7 @@ enum CellularRadioAccessTechnology: String, Codable, Equatable, Sendable {
     var displayName: String {
         switch self {
         case .unknown:
-            String(localized: "Unknown")
+            String(localized: "No signal")
         case .gsm:
             "2G"
         case .edge:
@@ -59,6 +59,9 @@ struct CellularRadioStatus: Equatable, Sendable {
 
     var signalAccessibilityDescription: String {
         guard let signalBars else {
+            if technology == .unknown {
+                return String(localized: "No signal")
+            }
             return String(localized: "Signal unavailable")
         }
         return String(localized: "\(signalBars) of 4 signal bars")

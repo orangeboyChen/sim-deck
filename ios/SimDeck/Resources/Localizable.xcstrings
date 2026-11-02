@@ -3190,6 +3190,16 @@
         }
       }
     },
+    "No signal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无信号"
+          }
+        }
+      }
+    },
     "SIM" : {
       "localizations" : {
         "zh-Hans" : {
