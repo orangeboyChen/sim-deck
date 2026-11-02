@@ -99,21 +99,20 @@ var _ = Describe("Slot policy controller", func() {
 		_, err = controller.ConfigureProfile(context.Background(), first, Update{VoLTEEnabled: &enabled, DataEnabled: &disabled})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(commander.commands).To(Equal([]string{`AT+QCFG="ims",1`}))
-		_, err = controller.ConfigureProfile(context.Background(), second, Update{WiFiCallingEnabled: &enabled})
+		_, err = controller.ConfigureProfile(context.Background(), second, Update{IncomingCallsEnabled: &disabled})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(commander.commands).To(HaveLen(1))
-		Expect(controller.Profile(second).WiFiCallingStatus).To(Equal("inactive_profile"))
+		Expect(controller.Profile(second).IncomingCallsEnabled).To(BeFalse())
 		Expect(controller.SelectProfile(context.Background(), second)).To(Succeed())
 		Expect(controller.Current().DataEnabled).To(BeTrue())
-		Expect(controller.Current().WiFiCallingEnabled).To(BeTrue())
-		Expect(controller.Current().WiFiCallingStatus).To(Equal("not_checked"))
+		Expect(controller.Current().IncomingCallsEnabled).To(BeFalse())
 		Expect(commander.commands).To(Equal([]string{`AT+QCFG="ims",1`, `AT+QCFG="ims",0`}))
 
 		reloaded, err := NewController(directory, commander, time.Second)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(reloaded.Profile(first).DataEnabled).To(BeFalse())
 		Expect(reloaded.Profile(first).VoLTEEnabled).To(BeTrue())
-		Expect(reloaded.Profile(second).WiFiCallingEnabled).To(BeTrue())
+		Expect(reloaded.Profile(second).IncomingCallsEnabled).To(BeFalse())
 		Expect(reloaded.Current()).To(Equal(controller.Current()))
 	})
 
@@ -158,8 +157,7 @@ var _ = Describe("Slot policy controller", func() {
 			names = append(names, name)
 			return []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, nil
 		}
-		enabled := true
-		settings, err := controller.Configure(context.Background(), Update{WiFiCallingEnabled: &enabled})
+		settings, err := controller.ProbeWiFiCalling(context.Background(), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(settings.WiFiCallingStatus).To(Equal("gateway_found"))
 		Expect(names).To(Equal([]string{"epdg.epc.mnc001.mcc460.pub.3gppnetwork.org"}))
@@ -175,14 +173,38 @@ var _ = Describe("Slot policy controller", func() {
 			names = append(names, name)
 			return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
 		}
-		enabled := true
-		settings, err := controller.Configure(context.Background(), Update{WiFiCallingEnabled: &enabled})
+		settings, err := controller.ProbeWiFiCalling(context.Background(), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(settings.WiFiCallingStatus).To(Equal("gateway_not_found"))
 		Expect(names).To(Equal([]string{
 			"epdg.epc.mnc001.mcc460.pub.3gppnetwork.org",
 			"epdg.epc.mnc000.mcc460.pub.3gppnetwork.org",
 		}))
+	})
+
+	It("rejects a Wi-Fi Calling enable request until an IMS backend exists", func() {
+		controller, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		enabled := true
+		settings, err := controller.Configure(context.Background(), Update{WiFiCallingEnabled: &enabled})
+		Expect(err).To(MatchError("Wi-Fi Calling requires a device IMS backend"))
+		Expect(settings.WiFiCallingEnabled).To(BeFalse())
+		Expect(commander.commands).To(BeEmpty())
+		Expect(controller.Current().WiFiCallingEnabled).To(BeFalse())
+	})
+
+	It("clears saved Wi-Fi Calling preferences that never had an IMS backend", func() {
+		path := filepath.Join(directory, "slot-policy.json")
+		data := `{"version":2,"wifi_calling_enabled":true,"profiles":{"89000000000000000001":{"wifi_calling_enabled":true}},"active_profile_id":"89000000000000000001"}`
+		Expect(os.WriteFile(path, []byte(data), 0o600)).To(Succeed())
+		controller, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(controller.Current().WiFiCallingEnabled).To(BeFalse())
+		Expect(controller.Profile("89000000000000000001").WiFiCallingEnabled).To(BeFalse())
+		reloaded, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reloaded.Current().WiFiCallingEnabled).To(BeFalse())
+		Expect(reloaded.Profile("89000000000000000001").WiFiCallingEnabled).To(BeFalse())
 	})
 
 	It("restarts the modem explicitly after an IMS setting change", func() {

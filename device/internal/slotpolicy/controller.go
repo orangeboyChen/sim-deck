@@ -78,6 +78,22 @@ func NewController(directory string, commander Commander, timeout time.Duration)
 	if state.Profiles == nil {
 		state.Profiles = make(map[string]Settings)
 	}
+	// Earlier builds stored the requested switch state without an IMS backend.
+	// Clear it so callers never mistake that preference for a working service.
+	changed := state.Settings.WiFiCallingEnabled
+	state.Settings.WiFiCallingEnabled = false
+	for profileID, settings := range state.Profiles {
+		if settings.WiFiCallingEnabled {
+			changed = true
+			settings.WiFiCallingEnabled = false
+			state.Profiles[profileID] = settings
+		}
+	}
+	if changed {
+		if err := save(path, state); err != nil {
+			return nil, fmt.Errorf("clear unavailable Wi-Fi Calling preference: %w", err)
+		}
+	}
 	return &Controller{path: path, commander: commander, timeout: timeout, settings: state.Settings,
 		profiles: state.Profiles, activeProfileID: state.ActiveProfileID, lookupIP: net.DefaultResolver.LookupIPAddr}, nil
 }
@@ -114,7 +130,7 @@ func (controller *Controller) SelectProfile(ctx context.Context, profileID strin
 		// Migrate the former slot-wide preferences to the first active profile.
 		next = previous
 	}
-	if profileID != "" && next.WiFiCallingEnabled {
+	if profileID != "" && next.WiFiCallingStatus != "" {
 		next.WiFiCallingStatus = "not_checked"
 	}
 	if err := controller.applyTransition(ctx, previous, next); err != nil {
@@ -123,7 +139,7 @@ func (controller *Controller) SelectProfile(ctx context.Context, profileID strin
 	profiles := cloneProfiles(controller.profiles)
 	if _, exists := profiles[controller.activeProfileID]; controller.activeProfileID != "" && controller.activeProfileID != profileID && exists {
 		inactive := previous
-		if inactive.WiFiCallingEnabled {
+		if inactive.WiFiCallingStatus != "" {
 			inactive.WiFiCallingStatus = "inactive_profile"
 		}
 		profiles[controller.activeProfileID] = inactive
@@ -200,19 +216,13 @@ func (controller *Controller) configure(ctx context.Context, profileID string, u
 		next.VoLTEEnabled = *update.VoLTEEnabled
 	}
 	if update.WiFiCallingEnabled != nil {
-		next.WiFiCallingEnabled = *update.WiFiCallingEnabled
-		if !next.WiFiCallingEnabled {
-			next.WiFiCallingStatus = "off"
+		if *update.WiFiCallingEnabled {
+			return previous, errors.New("Wi-Fi Calling requires a device IMS backend")
 		}
-		if next.WiFiCallingEnabled && !active {
-			next.WiFiCallingStatus = "inactive_profile"
-		}
+		next.WiFiCallingEnabled = false
 	}
-	if !active && next.WiFiCallingEnabled {
+	if !active && next.WiFiCallingStatus != "" {
 		next.WiFiCallingStatus = "inactive_profile"
-	}
-	if active && next.WiFiCallingEnabled && !previous.WiFiCallingEnabled {
-		next.WiFiCallingStatus = controller.probeWiFiCalling(ctx)
 	}
 	if active {
 		if err := controller.applyTransition(ctx, previous, next); err != nil {
@@ -246,11 +256,7 @@ func (controller *Controller) ProbeWiFiCalling(ctx context.Context, profileID st
 		return controller.profileLocked(profileID), errors.New("eSIM profile is not active")
 	}
 	next := controller.settings
-	if !next.WiFiCallingEnabled {
-		next.WiFiCallingStatus = "off"
-	} else {
-		next.WiFiCallingStatus = controller.probeWiFiCalling(ctx)
-	}
+	next.WiFiCallingStatus = controller.probeWiFiCalling(ctx)
 	if next == controller.settings {
 		return next, nil
 	}

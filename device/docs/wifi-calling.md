@@ -1,15 +1,16 @@
 # Wi-Fi Calling state and device diagnostics
 
-The `wifi_calling_enabled` control records the owner's preference on the modem
-host. For an eSIM, preferences for Mobile Data, Airplane Mode, incoming calls,
-incoming SMS, VoLTE, and Wi-Fi Calling are keyed by the modem's profile ID
+The device reserves a `wifi_calling_enabled` field for a future IMS backend,
+but rejects enable requests until that backend exists. For an eSIM,
+preferences for Mobile Data, Airplane Mode, incoming calls, incoming SMS, and
+VoLTE, plus the latest Wi-Fi Calling diagnostic, are keyed by the modem's profile ID
 (ICCID). The outer SIM settings operate on the currently enabled eSIM profile.
 Preferences for an inactive profile can be saved without changing the modem;
 the device applies its radio and VoLTE settings when that profile becomes active.
 If the modem later uses a physical SIM, the previous eSIM policy is cleared
 from the active slot; its per-profile preferences remain stored locally.
 
-Turning on Wi-Fi Calling performs a device-side diagnostic. The device reads the
+The explicit gateway check performs a device-side diagnostic. The device reads the
 active SIM's IMSI through its serialized AT connection, derives possible 2- and
 3-digit MNC ePDG names, and resolves their standard DNS names over the host's
 network. The IMSI is not persisted or returned to the app. A manual refresh
@@ -17,7 +18,6 @@ repeats the diagnostic.
 
 | Status | Meaning |
 | --- | --- |
-| `off` | The owner preference is off. |
 | `inactive_profile` | This eSIM profile is not active, so it cannot be probed. |
 | `not_checked` | The profile became active and needs a fresh probe. |
 | `gateway_found` | At least one standard ePDG hostname resolved. |
