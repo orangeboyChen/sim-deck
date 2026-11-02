@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"syscall"
 	"testing"
 )
 
@@ -65,5 +67,35 @@ func TestMetricsRejectsRemoteEndpoints(t *testing.T) {
 		if _, err := NewMetrics(address); err == nil {
 			t.Fatalf("accepted %q", address)
 		}
+	}
+}
+
+func TestMetricsAcceptsFreshRegistrationAfterCompanionRestart(t *testing.T) {
+	body := fmt.Sprintf("%s{module=\"vowifi-0\"} 1\n%s{module=\"vowifi-0\"} 1\n%s{module=\"vowifi-0\"} 1\n%s{module=\"vowifi-0\"} 1\n",
+		registeredMetric, tunnelMetric, childSAMetric, gmMetric)
+	serve := func() *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprint(writer, body)
+		}))
+	}
+	server := serve()
+	metrics, err := NewMetrics(server.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := metrics.Probe(context.Background()); err != nil || !metrics.Ready() {
+		t.Fatalf("initial registration unavailable: %v", err)
+	}
+	metrics.Invalidate()
+	server.Close()
+	if _, err := metrics.Probe(context.Background()); !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("expected refused local connection during restart, got %v", err)
+	}
+	server = serve()
+	defer server.Close()
+	metrics.url = server.URL + "/metrics"
+	status, err := metrics.Probe(context.Background())
+	if err != nil || status != "ims_registered" || !metrics.Ready() {
+		t.Fatalf("fresh registration after restart rejected: status=%q ready=%v error=%v", status, metrics.Ready(), err)
 	}
 }

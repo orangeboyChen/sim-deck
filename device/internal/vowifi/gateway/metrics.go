@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -64,6 +65,11 @@ func (metrics *Metrics) Probe(ctx context.Context) (string, error) {
 	response, err := metrics.client.Do(request)
 	if err != nil {
 		metrics.ready.Store(false)
+		// A refused loopback connection means the old companion process has
+		// stopped, even if the polling interval missed its zero-valued gauges.
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			metrics.awaitDown.Store(false)
+		}
 		return "backend_unavailable", err
 	}
 	defer response.Body.Close()
