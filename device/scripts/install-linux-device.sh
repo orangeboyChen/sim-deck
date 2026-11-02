@@ -7,12 +7,17 @@ property() {
 }
 
 audio_node() {
-  local kind="$1" serial="$2"
+  local kind="$1" key="$2"
   case "$kind" in
-    control) printf '%s' "${audio_control[$serial]:-}" ;;
-    capture) printf '%s' "${audio_capture[$serial]:-}" ;;
-    playback) printf '%s' "${audio_playback[$serial]:-}" ;;
+    control) printf '%s' "${audio_control[$key]:-}" ;;
+    capture) printf '%s' "${audio_capture[$key]:-}" ;;
+    playback) printf '%s' "${audio_playback[$key]:-}" ;;
   esac
+}
+
+device_key() {
+  local serial="$1" path="$2"
+  printf '%s|%s' "$serial" "$path"
 }
 
 alsa_device_name() {
@@ -36,24 +41,27 @@ alsa_device_name() {
 }
 
 print_tree() {
-  local node_count="$1" index serial capture playback
+  local node_count="$1" index key serial path capture playback
   printf 'node\n'
   printf '├── platform: linux\n'
   printf '├── node_id: %s\n' "$(cat /etc/machine-id 2>/dev/null || printf 'unavailable')"
   printf '└── devices\n'
   index=1
-  for serial in "${serials[@]}"; do
+  for key in "${serials[@]}"; do
+    serial="${device_serial[$key]}"
+    path="${device_path[$key]}"
     printf '    %s── modem-%s\n' "$([[ "$index" -eq "$node_count" ]] && printf '└' || printf '├')" "$index"
     printf '        ├── identity\n'
     printf '        │   ├── usb_serial: %s\n' "$serial"
-    printf '        │   └── at_interface: %s\n' "${at_interface[$serial]}"
+    printf '        │   ├── usb_path: %s\n' "$path"
+    printf '        │   └── at_interface: %s\n' "${at_interface[$key]}"
     printf '        ├── at\n'
-    printf '        │   ├── host: %s\n' "${at_node[$serial]}"
+    printf '        │   ├── host: %s\n' "${at_node[$key]}"
     printf '        │   └── container: /dev/sim-deck/at\n'
     printf '        ├── audio\n'
-    printf '        │   ├── control: %s\n' "${audio_control[$serial]}"
-    capture="${audio_capture[$serial]}"
-    playback="${audio_playback[$serial]}"
+    printf '        │   ├── control: %s\n' "${audio_control[$key]}"
+    capture="${audio_capture[$key]}"
+    playback="${audio_playback[$key]}"
     printf '        │   ├── capture: %s\n' "$capture"
     printf '        │   └── playback: %s\n' "$playback"
     printf '        └── container_environment\n'
@@ -66,7 +74,7 @@ print_tree() {
 }
 
 discover_audio_nodes() {
-  local dev_root="$1" node data serial card candidate
+  local dev_root="$1" node data serial path key card candidate
   local -a capture_candidates playback_candidates
   for node in "$dev_root"/snd/controlC*; do
     [[ -e "$node" ]] || continue
@@ -74,6 +82,10 @@ discover_audio_nodes() {
     [[ "$(property ID_VENDOR_ID "$data")" == 2c7c ]] || continue
     serial="$(property ID_SERIAL_SHORT "$data")"
     [[ -n "$serial" ]] || continue
+    path="$(property ID_PATH "$data")"
+    [[ -n "$path" ]] || continue
+    path="${path%:*}"
+    key="$(device_key "$serial" "$path")"
     card="${node##*controlC}"
     [[ "$card" =~ ^[0-9]+$ ]] || continue
     capture_candidates=()
@@ -84,23 +96,30 @@ discover_audio_nodes() {
     for candidate in "$dev_root"/snd/pcmC"$card"D*p; do
       [[ -e "$candidate" ]] && playback_candidates+=("$candidate")
     done
-    audio_control[$serial]="$node"
+    audio_control[$key]="$node"
     if [[ ${#capture_candidates[@]} -eq 1 ]]; then
-      audio_capture[$serial]="${capture_candidates[0]}"
+      audio_capture[$key]="${capture_candidates[0]}"
     fi
     if [[ ${#playback_candidates[@]} -eq 1 ]]; then
-      audio_playback[$serial]="${playback_candidates[0]}"
+      audio_playback[$key]="${playback_candidates[0]}"
     fi
   done
 }
 
 write_tty_rule() {
-  local serial="$1" interface="$2" index="$3"
+  local serial="$1" interface="$2" index="$3" path="${4:-}"
+  local path_match=''
+  if [[ -n "$path" ]]; then path_match=" ENV{ID_PATH}==\"$path*\","; fi
   if [[ -n "$interface" ]]; then
-    printf 'SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="2c7c", ENV{ID_SERIAL_SHORT}=="%s", ENV{ID_USB_INTERFACE_NUM}=="%s", ENV{ID_MM_DEVICE_IGNORE}="1", SYMLINK+="sim-deck/modem-%s-at", GROUP="dialout", MODE="0660"\n' "$serial" "$interface" "$index"
+    printf 'SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="2c7c", ENV{ID_SERIAL_SHORT}=="%s",%s ENV{ID_USB_INTERFACE_NUM}=="%s", ENV{ID_MM_DEVICE_IGNORE}="1", SYMLINK+="sim-deck/modem-%s-at", GROUP="dialout", MODE="0660"\n' "$serial" "$path_match" "$interface" "$index"
   else
-    printf 'SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="2c7c", ENV{ID_SERIAL_SHORT}=="%s", ENV{ID_MM_DEVICE_IGNORE}="1", SYMLINK+="sim-deck/modem-%s-at", GROUP="dialout", MODE="0660"\n' "$serial" "$index"
+    printf 'SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="2c7c", ENV{ID_SERIAL_SHORT}=="%s",%s ENV{ID_MM_DEVICE_IGNORE}="1", SYMLINK+="sim-deck/modem-%s-at", GROUP="dialout", MODE="0660"\n' "$serial" "$path_match" "$index"
   fi
+}
+
+write_audio_rule() {
+  local kernel="$1" serial="$2" path="$3" index="$4" kind="$5"
+  printf 'SUBSYSTEM=="sound", KERNEL=="%s", ATTRS{serial}=="%s", ATTRS{idVendor}=="2c7c", ENV{ID_PATH}=="%s*", SYMLINK+="sim-deck/modem-%s-audio-%s", GROUP="audio", MODE="0660"\n' "$kernel" "$serial" "$path" "$index" "$kind"
 }
 
 main() {
@@ -131,41 +150,43 @@ if [[ "$(uname -s)" != Linux ]]; then
 fi
 command -v udevadm >/dev/null || { printf '%s\n' 'Missing required command: udevadm' >&2; exit 1; }
 
-declare -A at_node=() at_interface=() at_parent=() audio_control=() audio_capture=() audio_playback=()
+declare -A at_node=() at_interface=() audio_control=() audio_capture=() audio_playback=() device_serial=() device_path=()
 for node in "$dev_root"/ttyUSB* "$dev_root"/ttyACM*; do
   [[ -e "$node" ]] || continue
   data="$(udevadm info --query=property --name="$node" 2>/dev/null || true)"
   [[ "$(property ID_VENDOR_ID "$data")" == 2c7c ]] || continue
   serial="$(property ID_SERIAL_SHORT "$data")"
   [[ -n "$serial" ]] || continue
-  device_path="$(property ID_PATH "$data")"
-  parent_path="${device_path%:*}"
-  if [[ -n "${at_parent[$serial]:-}" && "${at_parent[$serial]}" != "$parent_path" ]]; then
-    printf 'Duplicate USB serial %s belongs to multiple physical devices; refusing ambiguous mapping.\n' "$serial" >&2
+  path="$(property ID_PATH "$data")"
+  [[ -n "$path" ]] || {
+    printf 'Modem %s has no stable udev ID_PATH; cannot map its USB interfaces safely.\n' "$serial" >&2
     exit 1
-  fi
-  at_parent[$serial]="$parent_path"
+  }
+  path="${path%:*}"
+  key="$(device_key "$serial" "$path")"
+  device_serial[$key]="$serial"
+  device_path[$key]="$path"
   interface="$(property ID_USB_INTERFACE_NUM "$data")"
-  if [[ -z "${at_node[$serial]:-}" || "$interface" == 02 ]]; then
-    at_node[$serial]="$node"
-    at_interface[$serial]="$interface"
+  if [[ -z "${at_node[$key]:-}" || "$interface" == 02 ]]; then
+    at_node[$key]="$node"
+    at_interface[$key]="$interface"
   fi
 done
 discover_audio_nodes "$dev_root"
 
 serials=()
-while IFS= read -r serial; do [[ -n "$serial" ]] && serials+=("$serial"); done < <(printf '%s\n' "${!at_node[@]}" | sort)
+while IFS= read -r key; do [[ -n "$key" ]] && serials+=("$key"); done < <(printf '%s\n' "${!at_node[@]}" | sort)
 if [[ ${#serials[@]} -eq 0 ]]; then
   printf '%s\n' 'No Quectel modem with a stable USB serial identity was found.' >&2
   exit 1
 fi
-for serial in "${serials[@]}"; do
+for key in "${serials[@]}"; do
   missing_audio=()
   for kind in control capture playback; do
-    [[ -n "$(audio_node "$kind" "$serial")" ]] || missing_audio+=("$kind")
+    [[ -n "$(audio_node "$kind" "$key")" ]] || missing_audio+=("$kind")
   done
   if [[ ${#missing_audio[@]} -gt 0 ]]; then
-    printf 'Modem %s does not expose all UAC nodes (missing: %s). Enable and verify UAC before installing.\n' "$serial" "${missing_audio[*]}" >&2
+    printf 'Modem %s does not expose all UAC nodes (missing: %s). Enable and verify UAC before installing.\n' "${device_serial[$key]}" "${missing_audio[*]}" >&2
     exit 1
   fi
 done
@@ -212,13 +233,15 @@ if [[ -e "$rules_file" ]]; then cp -p "$rules_file" "$rules_file.bak.$(date +%s)
 {
   printf '%s\n' '# Generated by install-linux-device.sh.'
   index=1
-  for serial in "${serials[@]}"; do
-    interface="${at_interface[$serial]}"
-    write_tty_rule "$serial" "$interface" "$index"
+  for key in "${serials[@]}"; do
+    serial="${device_serial[$key]}"
+    interface="${at_interface[$key]}"
+    path="${device_path[$key]}"
+    write_tty_rule "$serial" "$interface" "$index" "$path"
     for kind in control capture playback; do
-      [[ -n "$(audio_node "$kind" "$serial")" ]] || continue
+      [[ -n "$(audio_node "$kind" "$key")" ]] || continue
       case "$kind" in control) kernel='controlC*' ;; capture) kernel='pcmC*D*c' ;; playback) kernel='pcmC*D*p' ;; esac
-      printf 'SUBSYSTEM=="sound", KERNEL=="%s", ATTRS{serial}=="%s", ATTRS{idVendor}=="2c7c", SYMLINK+="sim-deck/modem-%s-audio-%s", GROUP="audio", MODE="0660"\n' "$kernel" "$serial" "$index" "$kind"
+      write_audio_rule "$kernel" "$serial" "$path" "$index" "$kind"
     done
     index=$((index + 1))
   done
@@ -239,16 +262,16 @@ fi
   printf '  group_add: [%s, %s]\n' "$dialout_gid" "$audio_gid"
   printf '%s\n' '  security_opt: [no-new-privileges:true]' '  cap_drop: [ALL]' '  read_only: true' '  tmpfs: [/tmp:rw,noexec,nosuid,size=16m]' '' 'services:'
   index=1
-  for serial in "${serials[@]}"; do
+  for key in "${serials[@]}"; do
     # Keep Compose substitutions literal in the generated file.
     # shellcheck disable=SC2016
-    capture="${audio_capture[$serial]}"
-    playback="${audio_playback[$serial]}"
+    capture="${audio_capture[$key]}"
+    playback="${audio_playback[$key]}"
     capture_alsa="$(alsa_device_name "$capture")"
     playback_alsa="$(alsa_device_name "$playback")"
     printf '  modem-%s:\n    <<: *device-defaults\n    hostname: sim-deck-modem-%s\n    environment:\n      SIM_DECK_SERVER_URL: ${SIM_DECK_SERVER_URL}\n      SIM_DECK_ALLOW_INSECURE_HTTP: ${SIM_DECK_ALLOW_INSECURE_HTTP:-false}\n      SIM_DECK_AT_DEVICE: /dev/sim-deck/at\n      SIM_DECK_AUDIO_MODE: alsa\n      SIM_DECK_ALSA_CAPTURE_DEVICE: %s\n      SIM_DECK_ALSA_PLAYBACK_DEVICE: %s\n      SIM_DECK_STATE_DIRECTORY: /var/lib/sim-deck\n    devices:\n      - /dev/sim-deck/modem-%s-at:/dev/sim-deck/at\n' "$index" "$index" "$capture_alsa" "$playback_alsa" "$index"
     for kind in control capture playback; do
-      [[ -n "$(audio_node "$kind" "$serial")" ]] || continue
+      [[ -n "$(audio_node "$kind" "$key")" ]] || continue
       case "$kind" in
         control) target=/dev/snd/controlC0 ;;
         capture) target=/dev/snd/pcmC0D0c ;;

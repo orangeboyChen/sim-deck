@@ -129,8 +129,9 @@ sudo SIM_DECK_SERVER_URL=https://sim-deck.example.com \
 ```
 
 To start immediately, add `--start`. The installer prints the number of
-modems found and the generated Compose command. It exits instead of guessing
-when a serial identity is missing, duplicated, or missing an audio node.
+modems found and the generated Compose command. Duplicate USB serial values are
+disambiguated with each modem's stable udev `ID_PATH`; it exits if that physical
+path is unavailable or a modem is missing an audio node.
 
 For an isolated development LAN or encrypted VPN only, HTTP can be enabled:
 
@@ -204,7 +205,7 @@ encrypted WebRTC media uses the server's TURN service.
 ## Multiple modems
 
 One container controls exactly one modem. The installer maps each physical USB
-serial to its own service, for example:
+path, together with its USB serial, to its own service, for example:
 
 ```text
 modem-1 -> /dev/sim-deck/modem-1-at + modem-1-audio-*

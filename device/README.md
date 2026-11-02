@@ -151,10 +151,13 @@ another uses raw PCM.
 
 USB enumeration names such as `/dev/ttyUSB2` and ALSA card numbers can change
 after a reboot. The Linux installer discovers each modem by vendor and stable
-USB serial identity and writes `/dev/sim-deck/modem-N-*` links automatically.
-It refuses devices without a stable USB serial or with missing UAC control,
-capture, or playback nodes. After installation, verify each generated link
-before starting containers:
+USB serial and physical USB path, then writes `/dev/sim-deck/modem-N-*` links
+automatically. Physical paths let the installer distinguish modems whose
+firmware reports the same USB serial. These paths only map host devices into
+containers; each SimDeck device identity is still derived from the modem IMEI
+and SIM slots. It refuses devices without a stable USB path or with missing
+UAC control, capture, or playback nodes. After installation, verify each
+generated link before starting containers:
 
 ```sh
 udevadm info --attribute-walk --name=/dev/ttyUSB2
@@ -168,8 +171,9 @@ udevadm info --attribute-walk --name=/dev/ttyUSB2
 udevadm info --attribute-walk --name=/dev/snd/pcmC1D0c
 ```
 
-The installer intentionally refuses modems without a unique serial instead of
-falling back to a transient TTY name or an unverified physical USB-port guess.
+The installer combines `ID_SERIAL_SHORT` with the normalized udev `ID_PATH`
+for local modem mapping. Keep each modem connected to the same host USB port
+after installation so its generated device links remain stable.
 
 For local Docker Desktop end-to-end testing on a host that cannot pass the USB
 interface into the Linux VM, `SIM_DECK_AT_DEVICE` may instead use an explicit
