@@ -39,6 +39,9 @@ const operatorSelectionQuery = "AT+COPS?"
 
 const automaticOperatorSelectionTimeout = 3 * time.Minute
 
+// Quectel documents a network-dependent response time of up to 15 seconds for CFUN.
+const phoneFunctionalityTimeout = 20 * time.Second
+
 // ReadEquipmentIdentity returns the modem IMEI used only for local hardware identity derivation.
 func ReadEquipmentIdentity(ctx context.Context, client *at.Client, timeout time.Duration) (string, error) {
 	if client == nil || timeout <= 0 {
@@ -1153,9 +1156,13 @@ func (session *Session) Initialize(ctx context.Context) error {
 		if !simInserted && (command == `AT+CPMS="MT","MT","MT"` || command == "AT+CNMI=2,1,0,1,0" || command == "AT+CCWA=1,1") {
 			continue
 		}
-		response, err = session.send(ctx, command)
+		commandTimeout := session.timeout
+		if command == "AT+CFUN=1" && commandTimeout < phoneFunctionalityTimeout {
+			commandTimeout = phoneFunctionalityTimeout
+		}
+		response, err = session.sendWithTimeout(ctx, command, commandTimeout)
 		if err != nil {
-			return err
+			return fmt.Errorf("initialize modem with %s: %w", command, err)
 		}
 		if !response.OK() {
 			if isNoNetworkService(response.Terminal) || (command != "AT+CCWA=1,1" && isSIMNotInserted(response.Terminal)) {

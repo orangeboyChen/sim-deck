@@ -838,6 +838,59 @@ var _ = Describe("Modem session", func() {
 		Expect(errors.Is(err, context.DeadlineExceeded)).To(BeTrue())
 	})
 
+	It("waits for a slow phone functionality response after a modem restart", func() {
+		session, modemTransport, client := newTestSession(MessageSinkFunc(func(context.Context, sms.ReceivedMessage) error { return nil }))
+		DeferCleanup(func() {
+			_ = client.Close()
+			_ = modemTransport.Close()
+		})
+		session.timeout = 200 * time.Millisecond
+		commands := make(chan string, len(initializationCommands)+3)
+		go func() {
+			reader := bufio.NewReader(modemTransport)
+			for index := 0; index < len(initializationCommands)+3; index++ {
+				command, err := reader.ReadString('\r')
+				if err != nil {
+					return
+				}
+				commands <- strings.TrimSuffix(command, "\r")
+				switch command {
+				case simReadinessCommand + "\r":
+					_, _ = modemTransport.Write([]byte("+CPIN: READY\r\nOK\r\n"))
+				case "AT+CFUN=1\r":
+					time.Sleep(500 * time.Millisecond)
+					_, _ = modemTransport.Write([]byte("OK\r\n"))
+				case operatorSelectionQuery + "\r":
+					_, _ = modemTransport.Write([]byte("+COPS: 0\r\nOK\r\n"))
+				default:
+					_, _ = modemTransport.Write([]byte("OK\r\n"))
+				}
+			}
+		}()
+
+		Expect(session.Initialize(context.Background())).To(Succeed())
+		for _, expected := range append(append([]string{simReadinessCommand}, initializationCommands...), operatorSelectionQuery, "AT+CMGL=4") {
+			Eventually(commands).Should(Receive(Equal(expected)))
+		}
+	})
+
+	It("identifies the initialization command that timed out", func() {
+		session, modemTransport, client := newTestSession(MessageSinkFunc(func(context.Context, sms.ReceivedMessage) error { return nil }))
+		DeferCleanup(func() {
+			_ = client.Close()
+			_ = modemTransport.Close()
+		})
+		go func() {
+			reader := bufio.NewReader(modemTransport)
+			_, _ = reader.ReadString('\r')
+			_, _ = modemTransport.Write([]byte("+CPIN: READY\r\nOK\r\n"))
+			_, _ = reader.ReadString('\r')
+		}()
+
+		err := session.Initialize(context.Background())
+		Expect(err).To(MatchError("initialize modem with ATE0: context deadline exceeded"))
+	})
+
 	DescribeTable("rejects a modem without a ready SIM",
 		func(response string, expected string) {
 			session, modemTransport, client := newTestSession(MessageSinkFunc(func(context.Context, sms.ReceivedMessage) error { return nil }))
