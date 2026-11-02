@@ -148,6 +148,7 @@ struct SIMSettingsScreen: View {
     @State private var isLoadingControls = true
     @State private var isWorking = false
     @State private var showsVoLTERestartConfirmation = false
+    @State private var isConfirmingSIMRemoval = false
 
     init(model: AppModel, line: DeviceLineIdentity) {
         self.model = model
@@ -209,6 +210,16 @@ struct SIMSettingsScreen: View {
             Section("MMS") {
                 NavigationLink("MMS Configuration") { MMSSettingsScreen() }
             }
+            if !line.isOnline {
+                Section {
+                    Button("Remove SIM", role: .destructive) {
+                        isConfirmingSIMRemoval = true
+                    }
+                    .disabled(isWorking)
+                } footer: {
+                    Text("This removes the offline SIM identity and its encrypted profile from this account.")
+                }
+            }
         }
         .navigationTitle("SIM Card")
         .navigationBarTitleDisplayMode(.inline)
@@ -240,6 +251,16 @@ struct SIMSettingsScreen: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("VoLTE changes require a modem restart. Restarting temporarily takes this SIM offline.")
+        }
+        .confirmationDialog(
+            "Remove this offline SIM?",
+            isPresented: $isConfirmingSIMRemoval,
+            titleVisibility: .visible
+        ) {
+            Button("Remove SIM", role: .destructive) { removeSIM() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The SIM identity and its encrypted profile will be removed from this account. A future insertion creates a new managed record.")
         }
         .alert("Unable to Save SIM", isPresented: Binding(
             get: { saveErrorDescription != nil },
@@ -301,6 +322,20 @@ struct SIMSettingsScreen: View {
                         try await model.restartSlotModem(line: line)
                     }
                 }
+                dismiss()
+            } catch {
+                saveErrorDescription = error.localizedDescription
+                isWorking = false
+            }
+        }
+    }
+
+    private func removeSIM() {
+        Task {
+            isWorking = true
+            saveErrorDescription = nil
+            do {
+                try await model.removeSIM(line: line)
                 dismiss()
             } catch {
                 saveErrorDescription = error.localizedDescription

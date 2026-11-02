@@ -36,6 +36,8 @@ type Postgres struct {
 	db   *gorm.DB
 }
 
+const simRetireOfflineAfter = time.Minute
+
 // DeviceRecord is the server-readable portion of a paired device.
 type DeviceRecord struct {
 	ID                    string       `json:"device_uuid"`
@@ -1192,12 +1194,32 @@ func (store *Postgres) RetireSIMCard(ctx context.Context, simID string, retiredA
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND retired_at IS NULL", simID).First(&sim).Error; err != nil {
 			return databaseNotFound(err)
 		}
-		var slotCount int64
-		if err := tx.Model(&deviceSlotModel{}).Where("current_sim_id = ? AND removed_at IS NULL", simID).Count(&slotCount).Error; err != nil {
+		var slots []deviceSlotModel
+		if err := tx.Where("current_sim_id = ? AND removed_at IS NULL", simID).Find(&slots).Error; err != nil {
 			return err
 		}
-		if slotCount > 0 {
-			return domain.ErrSIMAssigned
+		for _, slot := range slots {
+			var device deviceModel
+			if err := tx.Where("id = ? AND revoked_at IS NULL", slot.DeviceID).First(&device).Error; err != nil {
+				return err
+			}
+			if device.LastSeenAt == nil || retiredAt.Sub(*device.LastSeenAt) < simRetireOfflineAfter {
+				return domain.ErrSIMAssigned
+			}
+			removedAt := retiredAt.UTC()
+			var assignment slotSIMAssignmentModel
+			if err := tx.Where("slot_id = ? AND sim_id = ? AND removed_at IS NULL", slot.ID, simID).First(&assignment).Error; err != nil {
+				return err
+			}
+			if assignment.InsertedAt.After(removedAt) {
+				removedAt = assignment.InsertedAt
+			}
+			if err := tx.Model(&assignment).Updates(map[string]any{"removed_at": removedAt}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&slot).Update("current_sim_id", nil).Error; err != nil {
+				return err
+			}
 		}
 		result := tx.Delete(&sim)
 		removed = result.RowsAffected

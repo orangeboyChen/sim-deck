@@ -911,6 +911,18 @@ final class AppModel {
         managedSIMs.removeAll { $0.id == sim.id }
     }
 
+    func removeSIM(line: DeviceLineIdentity) async throws {
+        guard !line.isOnline, let simID = line.simID else {
+            throw ServerConnectionError.deviceUnavailable
+        }
+        try await serverConnection.retireSIMCard(simID: simID)
+        managedSIMs.removeAll { $0.id == simID }
+        devices = try await serverConnection.loadDevices(profileKey: recoveredVaultKey)
+        reconcileLineHistory(using: devices)
+        callCoordinator.updateLineRoutes(devices)
+        messageTransport.updateLineRoutes(devices)
+    }
+
     func signOutFromServer() async throws {
         stopRealtimeUpdates()
         await stopPushNotifications()
