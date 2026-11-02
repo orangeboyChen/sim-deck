@@ -20,6 +20,27 @@ import (
 )
 
 var _ = Describe("Connect business services", func() {
+	It("computes authoritative device online and radio availability states", func() {
+		now := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+		freshSeen := now.Add(-59 * time.Second)
+		staleSeen := now.Add(-time.Minute)
+		freshRadio := now.Add(-10 * time.Second)
+		repository := &fakeRepository{ownerID: "owner-1", devices: []store.DeviceRecord{
+			{ID: "01900000-0000-7000-8000-000000000001", CommandPublicKey: make([]byte, commandPublicKeyBytes), LastSeenAt: &freshSeen, RadioStatusUpdatedAt: &freshRadio},
+			{ID: "01900000-0000-7000-8000-000000000002", CommandPublicKey: make([]byte, commandPublicKeyBytes), LastSeenAt: &staleSeen, RadioStatusUpdatedAt: &freshRadio},
+		}}
+		handler := Handler(repository, Config{Now: func() time.Time { return now }})
+		response := invokeOwnerRPC(handler, "ListDevices", &communicationv1.ListDevicesRequest{}, "owner-token")
+		Expect(response.Code).To(Equal(http.StatusOK))
+		body := new(communicationv1.ListDevicesResponse)
+		Expect(protojson.Unmarshal(response.Body.Bytes(), body)).To(Succeed())
+		Expect(body.Devices).To(HaveLen(2))
+		Expect(body.Devices[0].GetOnline()).To(BeTrue())
+		Expect(body.Devices[0].GetRadioStatusAvailable()).To(BeTrue())
+		Expect(body.Devices[1].GetOnline()).To(BeFalse())
+		Expect(body.Devices[1].GetRadioStatusAvailable()).To(BeFalse())
+	})
+
 	It("serves owner device inventory only through the RPC route", func() {
 		repository := &fakeRepository{ownerID: "owner-1", devices: []store.DeviceRecord{{ID: "01900000-0000-7000-8000-000000000001", NumericID: 7}}}
 		handler := Handler(repository, Config{Now: time.Now})
@@ -188,6 +209,21 @@ func invokeDeviceRPC(handler http.Handler, method string, request proto.Message,
 		panic(err)
 	}
 	rawRequest := httptest.NewRequest(http.MethodPost, "/relay.communication.v1.DeviceService/"+method, strings.NewReader(string(body)))
+	rawRequest.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		rawRequest.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, rawRequest)
+	return response
+}
+
+func invokeOwnerRPC(handler http.Handler, method string, request proto.Message, bearer string) *httptest.ResponseRecorder {
+	body, err := protojson.Marshal(request)
+	if err != nil {
+		panic(err)
+	}
+	rawRequest := httptest.NewRequest(http.MethodPost, "/relay.communication.v1.OwnerService/"+method, strings.NewReader(string(body)))
 	rawRequest.Header.Set("Content-Type", "application/json")
 	if bearer != "" {
 		rawRequest.Header.Set("Authorization", "Bearer "+bearer)

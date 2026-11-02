@@ -24,6 +24,24 @@ type ownerService struct {
 	router *router
 }
 
+const deviceOnlineWindow = time.Minute
+
+func deviceIsOnline(device store.DeviceRecord, now time.Time) bool {
+	if device.LastSeenAt == nil || len(device.CommandPublicKey) != commandPublicKeyBytes {
+		return false
+	}
+	age := now.Sub(*device.LastSeenAt)
+	return age >= 0 && age < deviceOnlineWindow
+}
+
+func radioStatusIsAvailable(updatedAt *time.Time, online bool, now time.Time) bool {
+	if !online || updatedAt == nil {
+		return false
+	}
+	age := now.Sub(*updatedAt)
+	return age >= 0 && age < deviceOnlineWindow
+}
+
 func mountOwnerService(mux *http.ServeMux, router *router) {
 	server := connect.NewServer(rpcAuthInterceptor(router))
 	communicationv1connect.RegisterOwnerServiceHandler(server, &ownerService{router: router})
@@ -39,8 +57,10 @@ func (service *ownerService) ListDevices(ctx context.Context, request *communica
 		return nil, connect.NewError(connect.CodeInternal, "unable to list devices")
 	}
 	response := &communicationv1.ListDevicesResponse{}
+	now := service.router.now()
 	for _, device := range devices {
-		item := &communicationv1.DeviceRecord{DeviceUuid: device.ID, NumericId: int32(device.NumericID), ProfileCiphertext: device.ProfileCiphertext, IdentityPublicKey: device.IdentityPublicKey, CommandPublicKey: device.CommandPublicKey, WrappedVaultKey: device.WrappedVaultKey, PairedAt: timestamppb.New(device.PairedAt), RadioAccessTechnology: device.RadioAccessTechnology}
+		online := deviceIsOnline(device, now)
+		item := &communicationv1.DeviceRecord{DeviceUuid: device.ID, NumericId: int32(device.NumericID), ProfileCiphertext: device.ProfileCiphertext, IdentityPublicKey: device.IdentityPublicKey, CommandPublicKey: device.CommandPublicKey, WrappedVaultKey: device.WrappedVaultKey, PairedAt: timestamppb.New(device.PairedAt), RadioAccessTechnology: device.RadioAccessTechnology, Online: online, RadioStatusAvailable: radioStatusIsAvailable(device.RadioStatusUpdatedAt, online, now)}
 		if device.LastSeenAt != nil {
 			item.LastSeenAt = timestamppb.New(*device.LastSeenAt)
 		}
@@ -52,7 +72,7 @@ func (service *ownerService) ListDevices(ctx context.Context, request *communica
 			item.RadioStatusUpdatedAt = timestamppb.New(*device.RadioStatusUpdatedAt)
 		}
 		for _, slot := range device.Slots {
-			s := &communicationv1.SlotRecord{SlotId: slot.ID, SlotKey: slot.SlotKey, SlotIndex: int32(slot.SlotIndex), ProfileCiphertext: slot.ProfileCiphertext, RadioAccessTechnology: slot.RadioAccessTechnology}
+			s := &communicationv1.SlotRecord{SlotId: slot.ID, SlotKey: slot.SlotKey, SlotIndex: int32(slot.SlotIndex), ProfileCiphertext: slot.ProfileCiphertext, RadioAccessTechnology: slot.RadioAccessTechnology, RadioStatusAvailable: radioStatusIsAvailable(slot.RadioStatusUpdatedAt, online, now)}
 			if slot.SIMID != nil {
 				s.SimId = slot.SIMID
 			}
@@ -590,6 +610,20 @@ func (service *ownerService) EnqueueCommand(ctx context.Context, request *commun
 	if _, err := ownerIDFromRPC(ctx); err != nil {
 		return nil, err
 	}
+	devices, err := service.router.repository.ListDevices(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, "unable to read device status")
+	}
+	deviceOnline := false
+	for _, device := range devices {
+		if device.ID == command.GetDeviceUuid() {
+			deviceOnline = deviceIsOnline(device, service.router.now())
+			break
+		}
+	}
+	if !deviceOnline {
+		return nil, connect.NewError(connect.CodeUnavailable, "device is offline")
+	}
 	if command.GetCreatedAt() == nil || command.GetExpiresAt() == nil || command.GetCreatedAt().CheckValid() != nil || command.GetExpiresAt().CheckValid() != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "encrypted command timestamps are invalid")
 	}
@@ -637,6 +671,9 @@ func (service *ownerService) GetCommandStatus(ctx context.Context, request *comm
 }
 
 func (service *ownerService) GetCommandRecipient(ctx context.Context, request *communicationv1.GetCommandRecipientRequest) (*communicationv1.GetCommandRecipientResponse, error) {
+	if _, err := ownerIDFromRPC(ctx); err != nil {
+		return nil, err
+	}
 	response := new(communicationv1.GetCommandRecipientResponse)
 	devices, err := service.router.repository.ListDevices(ctx)
 	if err != nil {
@@ -644,6 +681,9 @@ func (service *ownerService) GetCommandRecipient(ctx context.Context, request *c
 	}
 	for _, device := range devices {
 		if device.ID == request.GetDeviceUuid() {
+			if !deviceIsOnline(device, service.router.now()) {
+				return nil, connect.NewError(connect.CodeUnavailable, "device is offline")
+			}
 			if len(device.CommandPublicKey) != commandPublicKeyBytes {
 				return nil, connect.NewError(connect.CodeFailedPrecondition, "device command recipient is unavailable")
 			}

@@ -158,6 +158,8 @@ message DeviceRecord {
   optional int32 signal_bars = 10;
   optional google.protobuf.Timestamp radio_status_updated_at = 11;
   repeated SlotRecord slots = 12;
+  bool online = 13;
+  bool radio_status_available = 14;
 }
 
 message SlotRecord {
@@ -171,6 +173,7 @@ message SlotRecord {
   string radio_access_technology = 8;
   optional int32 signal_bars = 9;
   optional google.protobuf.Timestamp radio_status_updated_at = 10;
+  bool radio_status_available = 11;
 }
 
 message ListSimCardsResponse {
