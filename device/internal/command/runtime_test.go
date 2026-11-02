@@ -216,18 +216,38 @@ func (profiles *fakeESIMProfiles) ListESIMProfiles(context.Context) ([]ESIMProfi
 	return append([]ESIMProfile(nil), profiles.profiles...), profiles.err
 }
 
-func (profiles *fakeESIMProfiles) EnableESIMProfile(context.Context, string) error {
+func (profiles *fakeESIMProfiles) EnableESIMProfile(_ context.Context, profileID string) error {
 	profiles.operation = "enable"
+	if profiles.err == nil {
+		for index := range profiles.profiles {
+			profiles.profiles[index].Enabled = profiles.profiles[index].ProfileID == profileID
+		}
+	}
 	return profiles.err
 }
 
-func (profiles *fakeESIMProfiles) DisableESIMProfile(context.Context, string) error {
+func (profiles *fakeESIMProfiles) DisableESIMProfile(_ context.Context, profileID string) error {
 	profiles.operation = "disable"
+	if profiles.err == nil {
+		for index := range profiles.profiles {
+			if profiles.profiles[index].ProfileID == profileID {
+				profiles.profiles[index].Enabled = false
+			}
+		}
+	}
 	return profiles.err
 }
 
-func (profiles *fakeESIMProfiles) DeleteESIMProfile(context.Context, string) error {
+func (profiles *fakeESIMProfiles) DeleteESIMProfile(_ context.Context, profileID string) error {
 	profiles.operation = "delete"
+	if profiles.err == nil {
+		for index, profile := range profiles.profiles {
+			if profile.ProfileID == profileID {
+				profiles.profiles = append(profiles.profiles[:index], profiles.profiles[index+1:]...)
+				break
+			}
+		}
+	}
 	return profiles.err
 }
 
@@ -239,11 +259,13 @@ func (profiles *fakeESIMProfiles) RenameESIMProfile(_ context.Context, profileID
 }
 
 type fakeSlotSettings struct {
-	settings  slotpolicy.Settings
-	update    slotpolicy.Update
-	err       error
-	restarted bool
-	profileID string
+	settings    slotpolicy.Settings
+	update      slotpolicy.Update
+	err         error
+	probeErr    error
+	restarted   bool
+	profileID   string
+	forgottenID string
 }
 
 func (settings *fakeSlotSettings) Current() slotpolicy.Settings { return settings.settings }
@@ -270,13 +292,13 @@ func (settings *fakeSlotSettings) SelectProfile(_ context.Context, profileID str
 }
 
 func (settings *fakeSlotSettings) ForgetProfile(profileID string) error {
-	settings.profileID = profileID
+	settings.forgottenID = profileID
 	return settings.err
 }
 
 func (settings *fakeSlotSettings) ProbeWiFiCalling(_ context.Context, profileID string) (slotpolicy.Settings, error) {
 	settings.profileID = profileID
-	return settings.settings, settings.err
+	return settings.settings, settings.probeErr
 }
 
 func (settings *fakeSlotSettings) RestartModem(context.Context) error {
@@ -472,6 +494,89 @@ var _ = Describe("Encrypted command runtime", func() {
 			Version: 1, Operation: "slot.probe_vowifi", SlotID: state.SlotID, SIMID: state.SIMID,
 		}, testInstallationID)
 		Expect(err).To(MatchError(errESIMUnavailable))
+	})
+
+	It("rejects ambiguous active eSIM profiles before probing Wi-Fi Calling", func() {
+		runtime.esimSupported = true
+		runtime.esimProfiles = &fakeESIMProfiles{profiles: []ESIMProfile{
+			{ProfileID: "89000000000000000001", Enabled: true},
+			{ProfileID: "89000000000000000002", Enabled: true},
+		}}
+		_, err := runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.probe_vowifi", SlotID: state.SlotID, SIMID: state.SIMID,
+		}, testInstallationID)
+		Expect(err).To(MatchError("multiple eSIM profiles are enabled"))
+		Expect(settings.profileID).To(BeEmpty())
+	})
+
+	It("reports eSIM profile lookup and IMS probe failures", func() {
+		profileID := "89000000000000000001"
+		runtime.esimSupported = true
+		profiles := &fakeESIMProfiles{profiles: []ESIMProfile{{ProfileID: profileID, Enabled: true}}}
+		runtime.esimProfiles = profiles
+		lookupFailure := errors.New("eUICC profile list unavailable")
+		profiles.err = lookupFailure
+		_, err := runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.probe_vowifi", SlotID: state.SlotID, SIMID: state.SIMID,
+		}, testInstallationID)
+		Expect(err).To(MatchError(lookupFailure))
+
+		profiles.err = nil
+		probeFailure := errors.New("IMS metrics unavailable")
+		settings.probeErr = probeFailure
+		_, err = runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.probe_vowifi", SlotID: state.SlotID, SIMID: state.SIMID,
+		}, testInstallationID)
+		Expect(err).To(MatchError(probeFailure))
+		Expect(settings.profileID).To(Equal(profileID))
+
+		settings.probeErr = nil
+		selectionFailure := errors.New("eSIM policy could not be restored")
+		settings.err = selectionFailure
+		_, err = runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.probe_vowifi", SlotID: state.SlotID, SIMID: state.SIMID,
+		}, testInstallationID)
+		Expect(err).To(MatchError(selectionFailure))
+	})
+
+	It("does not update Wi-Fi Calling settings when eUICC profiles cannot be listed", func() {
+		profileID := "89000000000000000001"
+		runtime.esimSupported = true
+		lookupFailure := errors.New("eUICC profile list unavailable")
+		runtime.esimProfiles = &fakeESIMProfiles{err: lookupFailure}
+		enabled := true
+		_, err := runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.configure", SlotID: state.SlotID, SIMID: state.SIMID,
+			ESIMProfileID: profileID, WiFiCallingEnabled: &enabled,
+		}, testInstallationID)
+		Expect(err).To(MatchError(lookupFailure))
+		Expect(settings.update.WiFiCallingEnabled).To(BeNil())
+
+		runtime.esimProfiles = nil
+		_, err = runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.probe_vowifi", SlotID: state.SlotID, SIMID: state.SIMID,
+		}, testInstallationID)
+		Expect(err).To(MatchError(errESIMUnavailable))
+	})
+
+	It("reselects the active policy after eSIM lifecycle commands", func() {
+		profileID := "89000000000000000001"
+		profiles := &fakeESIMProfiles{profiles: []ESIMProfile{{ProfileID: profileID, Enabled: true}}}
+		runtime.esimProfiles = profiles
+		for _, operation := range []string{"esim.enable", "esim.disable", "esim.delete"} {
+			_, err := runtime.execute(context.Background(), Payload{
+				Version: 1, Operation: operation, SlotID: state.SlotID, SIMID: state.SIMID,
+				ESIMProfileID: profileID,
+			}, testInstallationID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(profiles.operation).To(Equal(strings.TrimPrefix(operation, "esim.")))
+			if operation == "esim.enable" {
+				Expect(settings.profileID).To(Equal(profileID))
+			} else {
+				Expect(settings.profileID).To(BeEmpty())
+			}
+		}
+		Expect(settings.forgottenID).To(Equal(profileID))
 	})
 
 	It("returns an encrypted modem error for a rejected SMS", func() {
