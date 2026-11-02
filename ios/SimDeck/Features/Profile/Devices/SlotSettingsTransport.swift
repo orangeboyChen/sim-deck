@@ -225,7 +225,7 @@ final class LiveSlotSettingsTransport: SlotSettingsTransport {
             incomingSMSEnabled: settings?.incomingSMSEnabled,
             volteEnabled: settings?.volteEnabled,
             esimProfileID: profileID,
-            wifiCallingEnabled: settings?.wifiCallingEnabled,
+            wifiCallingEnabled: nil,
             mmsAPN: settings?.mmsAPN,
             mmscURL: settings?.mmscURL,
             mmsProxyHost: settings?.mmsProxyHost,

@@ -38,8 +38,8 @@ struct SlotSettingsScreen: View {
             if let settings {
                 SlotControlSection(settings: binding(for: settings), isActiveProfile: isActiveProfile)
                 WiFiCallingSection(
-                    settings: binding(for: settings),
-                    canRefresh: isActiveProfile && settings.wifiCallingEnabled && settings == original && !isSaving && !isProbing,
+                    settings: settings,
+                    canRefresh: isActiveProfile && settings == original && !isSaving && !isProbing,
                     isProbing: isProbing,
                     refresh: probeWiFiCalling
                 )
@@ -214,20 +214,16 @@ struct SlotControlSection: View {
 }
 
 struct WiFiCallingSection: View {
-    @Binding var settings: SlotSettings
+    let settings: SlotSettings
     let canRefresh: Bool
     let isProbing: Bool
     let refresh: () -> Void
 
     var body: some View {
         Section {
-            Toggle("Wi-Fi Calling", isOn: $settings.wifiCallingEnabled)
-                .disabled(isProbing)
-            if settings.wifiCallingEnabled {
-                LabeledContent("Gateway check", value: statusDescription)
-                Button("Check Again", action: refresh)
-                    .disabled(!canRefresh)
-            }
+            LabeledContent("Gateway check", value: statusDescription)
+            Button("Check Again", action: refresh)
+                .disabled(!canRefresh)
         } header: {
             Text("Wi-Fi Calling")
         } footer: {
@@ -238,7 +234,6 @@ struct WiFiCallingSection: View {
     private var statusDescription: String {
         if isProbing { return String(localized: "Checking…") }
         switch settings.wifiCallingStatus {
-        case "off": return String(localized: "Off")
         case "inactive_profile": return String(localized: "Activate this plan to check")
         case "gateway_found": return String(localized: "Gateway found; calling unavailable")
         case "gateway_not_found": return String(localized: "No standard gateway found")

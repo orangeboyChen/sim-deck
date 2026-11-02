@@ -212,7 +212,7 @@ private struct ESIMProfileDetailScreen: View {
                 if let profileSettings {
                     LabeledContent("Mobile Data", value: profileSettings.dataEnabled ? String(localized: "On") : String(localized: "Off"))
                     LabeledContent("VoLTE", value: profileSettings.volteEnabled ? String(localized: "On") : String(localized: "Off"))
-                    LabeledContent("Wi-Fi Calling", value: wifiCallingSummary(profileSettings))
+                    LabeledContent("Gateway check", value: wifiCallingSummary(profileSettings))
                 }
                 if profile.isEnabled {
                     Text("Edit this plan's controls in SIM Card settings.")
@@ -272,8 +272,7 @@ private struct ESIMProfileDetailScreen: View {
     }
 
     private func wifiCallingSummary(_ settings: SlotSettings) -> String {
-        guard settings.wifiCallingEnabled else { return String(localized: "Off") }
-        if !profile.isEnabled { return String(localized: "Saved for this plan") }
+        if !profile.isEnabled { return String(localized: "Activate this plan to check") }
         switch settings.wifiCallingStatus {
         case "gateway_found": return String(localized: "Gateway found; calling unavailable")
         case "gateway_not_found": return String(localized: "No standard gateway found")

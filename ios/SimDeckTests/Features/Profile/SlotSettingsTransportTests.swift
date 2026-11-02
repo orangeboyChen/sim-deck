@@ -35,7 +35,7 @@ final class SlotSettingsTransportTests: XCTestCase {
         XCTAssertFalse(serverVisible.contains("incoming_sms_enabled"))
     }
 
-    func testUpdateSendsEveryOwnerControlAndReturnsEffectiveSettings() async throws {
+    func testUpdateSendsAvailableControlsAndOmitsWiFiCalling() async throws {
         let api = try SlotSettingsAPIFake(deviceID: deviceID)
         let transport = makeTransport(api: api)
         let requested = SlotSettings(
@@ -56,7 +56,7 @@ final class SlotSettingsTransportTests: XCTestCase {
         XCTAssertEqual(payload.incomingCallsEnabled, false)
         XCTAssertEqual(payload.incomingSMSEnabled, false)
         XCTAssertEqual(payload.volteEnabled, true)
-        XCTAssertEqual(payload.wifiCallingEnabled, true)
+        XCTAssertNil(payload.wifiCallingEnabled)
     }
 
     func testProfileControlsAndGatewayProbeUseEncryptedProfileID() async throws {
@@ -73,7 +73,7 @@ final class SlotSettingsTransportTests: XCTestCase {
         updated.wifiCallingEnabled = true
         _ = try await transport.update(updated, line: line, profileID: profileID)
         XCTAssertEqual(api.payloads.last?.esimProfileID, profileID)
-        XCTAssertEqual(api.payloads.last?.wifiCallingEnabled, true)
+        XCTAssertNil(api.payloads.last?.wifiCallingEnabled)
 
         _ = try await transport.probeWiFiCalling(line: line, profileID: profileID)
         XCTAssertEqual(api.payloads.last?.operation, "slot.probe_vowifi")
