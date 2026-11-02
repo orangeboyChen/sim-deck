@@ -78,6 +78,38 @@ var _ = Describe("Slot policy controller", func() {
 		Expect(reloaded.Current().VoLTEEnabled).To(BeTrue())
 	})
 
+	It("persists Wi-Fi Calling separately for each eSIM profile when a call backend exists", func() {
+		controller, err := NewControllerWithWiFiCalling(directory, commander, time.Second, true)
+		Expect(err).NotTo(HaveOccurred())
+		first, second := "89000000000000000001", "89000000000000000002"
+		Expect(controller.SelectProfile(context.Background(), first)).To(Succeed())
+		enabled := true
+		settings, err := controller.Configure(context.Background(), Update{WiFiCallingEnabled: &enabled})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.WiFiCallingEnabled).To(BeTrue())
+		Expect(controller.SelectProfile(context.Background(), second)).To(Succeed())
+		Expect(controller.Current().WiFiCallingEnabled).To(BeFalse())
+		Expect(controller.SelectProfile(context.Background(), first)).To(Succeed())
+		Expect(controller.Current().WiFiCallingEnabled).To(BeTrue())
+		reloaded, err := NewControllerWithWiFiCalling(directory, commander, time.Second, true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reloaded.Profile(first).WiFiCallingEnabled).To(BeTrue())
+		Expect(commander.commands).To(BeEmpty())
+	})
+
+	It("reports actual IMS companion registration when a backend probe is installed", func() {
+		controller, err := NewControllerWithWiFiCalling(directory, commander, time.Second, true)
+		Expect(err).NotTo(HaveOccurred())
+		controller.SetWiFiCallingProbe(func(context.Context) (string, error) { return "ims_registered", nil })
+		settings, err := controller.ProbeWiFiCalling(context.Background(), "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.WiFiCallingStatus).To(Equal("ims_registered"))
+		controller.SetWiFiCallingProbe(func(context.Context) (string, error) { return "", errors.New("gateway offline") })
+		settings, err = controller.ProbeWiFiCalling(context.Background(), "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.WiFiCallingStatus).To(Equal("backend_unavailable"))
+	})
+
 	It("migrates existing slot preferences to the first active eSIM profile", func() {
 		path := filepath.Join(directory, "slot-policy.json")
 		Expect(os.WriteFile(path, []byte(`{"version":1,"data_enabled":false,"incoming_calls_enabled":true,"incoming_sms_enabled":true,"volte_enabled":true}`), 0o600)).To(Succeed())

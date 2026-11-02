@@ -295,6 +295,12 @@ func (controller *Controller) endActive(ctx context.Context) error {
 	return err
 }
 
+// InvalidateProfile ends only the SIP call associated with a replaced SIM
+// profile. Cellular calls remain under the modem controller's ownership.
+func (controller *Controller) InvalidateProfile(ctx context.Context) error {
+	return controller.endActive(ctx)
+}
+
 func (controller *Controller) Refresh(ctx context.Context) error {
 	if controller.current() != nil {
 		return nil
