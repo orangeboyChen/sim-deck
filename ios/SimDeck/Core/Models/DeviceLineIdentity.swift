@@ -31,7 +31,7 @@ enum CellularRadioAccessTechnology: String, Codable, Equatable, Sendable {
     var displayName: String {
         switch self {
         case .unknown:
-            String(localized: "No signal")
+            String(localized: "Unknown")
         case .gsm:
             "2G"
         case .edge:

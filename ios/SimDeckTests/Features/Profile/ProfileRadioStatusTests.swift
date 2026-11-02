@@ -15,7 +15,7 @@ final class ProfileRadioStatusTests: XCTestCase {
         XCTAssertEqual(CellularRadioAccessTechnology.lte.displayName, "LTE")
         XCTAssertEqual(CellularRadioAccessTechnology.nrNSA.displayName, "5G")
         XCTAssertEqual(CellularRadioAccessTechnology.nrSA.displayName, "5G")
-        XCTAssertEqual(CellularRadioAccessTechnology.unknown.displayName, "No signal")
+        XCTAssertEqual(CellularRadioAccessTechnology.unknown.displayName, "Unknown")
     }
 
     func testSignalStatusRejectsImpossibleBarCounts() {

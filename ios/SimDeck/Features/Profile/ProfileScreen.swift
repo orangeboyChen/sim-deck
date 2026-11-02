@@ -139,7 +139,7 @@ private struct SIMRadioStatusSummary: View {
                 }
                 .font(.subheadline.weight(.semibold))
             } else if isOnline, let status {
-                Text(status.technology.displayName)
+                Text(status.technology == .unknown ? String(localized: "No signal") : status.technology.displayName)
                     .font(.subheadline.weight(.semibold))
             } else if isOnline {
                 Text("Signal unavailable")
