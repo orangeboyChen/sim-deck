@@ -41,6 +41,7 @@ final class AppModel {
     var installationID: UUID?
     private(set) var installationTrust: AppInstallationTrust?
     var pendingInstallationRevocationIDs: [UUID]
+    private(set) var isServerConnectionDegraded = false
     let serverConnection: ServerConnectionManager
     let callCoordinator: CallKitCoordinator
     let installationBootstrapper: any InstallationBootstrapping
@@ -179,6 +180,9 @@ final class AppModel {
                     url: baseURL.appending(path: "healthz"),
                     networkType: self.networkPathObserver?.networkType ?? 0
                 )
+            },
+            onConnectionQualityChanged: { [weak self] degraded in
+                self?.isServerConnectionDegraded = degraded
             }
         )
     }
@@ -222,13 +226,7 @@ final class AppModel {
             messageTransport.updateLineRoutes(devices)
             try? await voipPushCoordinator?.uploadPendingToken()
             try? await alertPushCoordinator?.uploadPendingToken()
-        } catch {
-            devices = devices.map { device in
-                var offlineDevice = device
-                offlineDevice.isOnline = false
-                return offlineDevice
-            }
-        }
+        } catch { }
     }
 
     func signInToServer(password: String) async throws {
@@ -468,6 +466,7 @@ final class AppModel {
 
     func stopRealtimeUpdates() {
         stopMessageRealtimeUpdates()
+        isServerConnectionDegraded = false
         for task in deviceStatusExpiryTasks.values {
             task.cancel()
         }
@@ -521,9 +520,6 @@ final class AppModel {
 
     @discardableResult
     func sendMessage(lineID: UUID, remoteNumber: String, body: String) async throws -> UUID {
-        guard devices.contains(where: { $0.id == lineID && $0.isOnline }) else {
-            throw ServerConnectionError.deviceUnavailable
-        }
         let number = DialString.normalized(remoteNumber)
         guard DialString.isValid(number),
               !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -563,9 +559,6 @@ final class AppModel {
         body: String,
         attachment: MessageImageAttachment
     ) async throws -> UUID {
-        guard devices.contains(where: { $0.id == lineID && $0.isOnline }) else {
-            throw ServerConnectionError.deviceUnavailable
-        }
         let number = DialString.normalized(remoteNumber)
         guard DialString.isValid(number), attachment.data != nil else {
             throw ServerConnectionError.invalidResponse
@@ -607,11 +600,6 @@ final class AppModel {
               let message = conversation.messages.first(where: { $0.id == id }),
               message.direction == .sent else {
             throw ServerConnectionError.invalidResponse
-        }
-        guard devices.contains(where: {
-            $0.id == conversation.lineID && $0.isOnline
-        }) else {
-            throw ServerConnectionError.deviceUnavailable
         }
         updateMessageStatus(id: id, status: .sending)
         do {
@@ -912,9 +900,7 @@ final class AppModel {
     }
 
     func removeSIM(line: DeviceLineIdentity) async throws {
-        guard !line.isOnline, let simID = line.simID else {
-            throw ServerConnectionError.deviceUnavailable
-        }
+        guard let simID = line.simID else { throw ServerConnectionError.deviceUnavailable }
         try await serverConnection.retireSIMCard(simID: simID)
         managedSIMs.removeAll { $0.id == simID }
         devices = try await serverConnection.loadDevices(profileKey: recoveredVaultKey)
@@ -1062,34 +1048,15 @@ final class AppModel {
         var routesChanged = false
         for status in statuses {
             guard let index = devices.firstIndex(where: { $0.id == status.lineID }) else { continue }
-            let age = Date.now.timeIntervalSince(status.reportedAt)
-            let isFresh = age >= 0 && age < 60
             var line = devices[index]
-            let isOnline = status.isOnline && isFresh
             line.numericID = status.numericID
-            line.isOnline = isOnline
-            line.radioStatus = isOnline ? status.radioStatus : nil
+            line.radioStatus = status.isOnline ? status.radioStatus : nil
             devices[index] = line
             if let slotSettings = status.slotSettings {
                 slotSettingsByLineID[line.id] = slotSettings
             }
             updateManagedSIMAssignment(for: line, reportedAt: status.reportedAt)
             routesChanged = true
-            deviceStatusReportedAt[status.lineID] = status.reportedAt
-            deviceStatusExpiryTasks[status.lineID]?.cancel()
-            if isOnline {
-                let delay = max(1, 60 - max(0, age))
-                deviceStatusExpiryTasks[status.lineID] = Task { [weak self] in
-                    do {
-                        try await Task.sleep(for: .seconds(delay))
-                    } catch {
-                        return
-                    }
-                    self?.expireDeviceStatus(lineID: status.lineID, reportedAt: status.reportedAt)
-                }
-            } else {
-                deviceStatusExpiryTasks.removeValue(forKey: status.lineID)
-            }
         }
         guard routesChanged else { return }
         callCoordinator.updateLineRoutes(devices)
@@ -1132,18 +1099,6 @@ final class AppModel {
                 phoneNumber: line.phoneNumber
             ))
         }
-    }
-
-    private func expireDeviceStatus(lineID: UUID, reportedAt: Date) {
-        guard deviceStatusReportedAt[lineID] == reportedAt,
-              let index = devices.firstIndex(where: { $0.id == lineID }) else { return }
-        var line = devices[index]
-        line.isOnline = false
-        line.radioStatus = nil
-        devices[index] = line
-        deviceStatusExpiryTasks.removeValue(forKey: lineID)
-        callCoordinator.updateLineRoutes(devices)
-        messageTransport.updateLineRoutes(devices)
     }
 
     func clearLocalMessageCache() throws {

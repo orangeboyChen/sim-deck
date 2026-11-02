@@ -56,6 +56,12 @@ final class ServerConnectEncryptedEventStream: EncryptedEventStream {
                 throw ServerConnectionError.eventStreamUnavailable
             case .message(let response):
                 let events = try response.events.map(ServerConnectionManager.eventEnvelope(from:))
+                if response.heartbeat {
+                    guard events.isEmpty, response.nextSequence == cursor else {
+                        throw ServerConnectionError.invalidResponse
+                    }
+                    return EncryptedEventPage(events: [], nextSequence: cursor, isHeartbeat: true)
+                }
                 guard !events.isEmpty,
                       response.nextSequence > cursor,
                       events.last?.sequence == response.nextSequence else {
@@ -101,27 +107,39 @@ final class MessageEventMonitor {
     private let currentSequence: () -> Int64
     private let synchronizeThrough: (Int64) async -> Bool
     private let onDisconnected: () -> Void
+    private let onConnectionQualityChanged: (Bool) -> Void
     private let waitBeforeReconnect: () async throws -> Void
+    private let waitBeforeHeartbeatCheck: () async throws -> Void
     private var task: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
     private var activeStream: (any EncryptedEventStream)?
     private var streamGeneration: UUID?
     private var wantsUpdates = false
     private var networkIsAvailable = true
+    private var receivedServerActivity = false
+    private var missedHeartbeats = 0
+    private var connectionIsDegraded = false
 
     init(
         opener: any EncryptedEventStreamOpening,
         currentSequence: @escaping () -> Int64,
         synchronizeThrough: @escaping (Int64) async -> Bool,
         onDisconnected: @escaping () -> Void = {},
+        onConnectionQualityChanged: @escaping (Bool) -> Void = { _ in },
         waitBeforeReconnect: @escaping () async throws -> Void = {
             try await Task.sleep(for: .seconds(2))
+        },
+        waitBeforeHeartbeatCheck: @escaping () async throws -> Void = {
+            try await Task.sleep(for: .seconds(15))
         }
     ) {
         self.opener = opener
         self.currentSequence = currentSequence
         self.synchronizeThrough = synchronizeThrough
         self.onDisconnected = onDisconnected
+        self.onConnectionQualityChanged = onConnectionQualityChanged
         self.waitBeforeReconnect = waitBeforeReconnect
+        self.waitBeforeHeartbeatCheck = waitBeforeHeartbeatCheck
     }
 
     var isRunning: Bool { task != nil }
@@ -132,8 +150,13 @@ final class MessageEventMonitor {
         guard task == nil else { return }
         let generation = UUID()
         streamGeneration = generation
+        receivedServerActivity = false
+        missedHeartbeats = 0
         task = Task { [weak self] in
             await self?.run(generation: generation)
+        }
+        heartbeatTask = Task { [weak self] in
+            await self?.monitorHeartbeats(generation: generation)
         }
     }
 
@@ -155,8 +178,11 @@ final class MessageEventMonitor {
         streamGeneration = nil
         task?.cancel()
         task = nil
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
         activeStream?.close()
         activeStream = nil
+        updateConnectionQuality(degraded: false)
     }
 
     private func run(generation: UUID) async {
@@ -186,12 +212,18 @@ final class MessageEventMonitor {
                 while streamGeneration == generation && !Task.isCancelled {
                     let page = try await stream.receive()
                     guard streamGeneration == generation, !Task.isCancelled else { return }
+                    receivedServerActivity = true
+                    if page.isHeartbeat {
+                        updateConnectionQuality(degraded: false)
+                        continue
+                    }
                     let synchronized = await synchronizeThrough(page.nextSequence)
                     guard streamGeneration == generation, !Task.isCancelled else { return }
                     guard synchronized else {
                         throw ServerConnectionError.eventStreamUnavailable
                     }
                     try await stream.acknowledge(sequence: page.nextSequence)
+                    updateConnectionQuality(degraded: false)
                     Self.logger.debug(
                         "Acknowledged encrypted message events through sequence \(page.nextSequence, privacy: .public)"
                     )
@@ -209,5 +241,32 @@ final class MessageEventMonitor {
                 }
             }
         }
+    }
+
+    private func monitorHeartbeats(generation: UUID) async {
+        while streamGeneration == generation && !Task.isCancelled {
+            do {
+                try await waitBeforeHeartbeatCheck()
+            } catch {
+                return
+            }
+            guard streamGeneration == generation, !Task.isCancelled else { return }
+            if receivedServerActivity {
+                receivedServerActivity = false
+                missedHeartbeats = 0
+                updateConnectionQuality(degraded: false)
+            } else {
+                missedHeartbeats += 1
+                if missedHeartbeats >= 3 {
+                    updateConnectionQuality(degraded: true)
+                }
+            }
+        }
+    }
+
+    private func updateConnectionQuality(degraded: Bool) {
+        guard connectionIsDegraded != degraded else { return }
+        connectionIsDegraded = degraded
+        onConnectionQualityChanged(degraded)
     }
 }

@@ -22,6 +22,7 @@ import (
 )
 
 const eventStreamPollInterval = 500 * time.Millisecond
+const eventStreamHeartbeatInterval = 15 * time.Second
 const deviceStatusEventRetention = 2 * time.Minute
 
 type rpcOwnerContextKey struct{}
@@ -272,6 +273,8 @@ func (service *syncService) watchEvents(ctx context.Context, stream watchEventsS
 	}()
 	ticker := time.NewTicker(eventStreamPollInterval)
 	defer ticker.Stop()
+	heartbeatTicker := time.NewTicker(eventStreamHeartbeatInterval)
+	defer heartbeatTicker.Stop()
 	for {
 		if cursor == acknowledged {
 			events, listErr := service.router.repository.ListEvents(ctx, cursor, defaultEventPageSize, service.router.now())
@@ -302,6 +305,16 @@ func (service *syncService) watchEvents(ctx context.Context, stream watchEventsS
 			}
 			acknowledged = cursor
 		case <-ticker.C:
+		case <-heartbeatTicker.C:
+			if cursor == acknowledged {
+				if sendErr := stream.Send(&communicationv1.WatchEventsResponse{
+					NextSequence: cursor,
+					Heartbeat:    true,
+					ServerTime:   timestamppb.New(service.router.now()),
+				}); sendErr != nil {
+					return sendErr
+				}
+			}
 		}
 	}
 }

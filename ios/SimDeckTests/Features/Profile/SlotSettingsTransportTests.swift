@@ -100,9 +100,8 @@ final class SlotSettingsTransportTests: XCTestCase {
         let offlineTransport = makeTransport(api: offlineAPI)
         var offlineLine = line(commandKey: offlineAPI.commandPublicKey)
         offlineLine.isOnline = false
-        await assertError(.unavailable) {
-            _ = try await offlineTransport.load(line: offlineLine)
-        }
+        _ = try await offlineTransport.load(line: offlineLine)
+        XCTAssertEqual(offlineAPI.requests.count, 1)
 
         let missingIdentityAPI = try SlotSettingsAPIFake(deviceID: deviceID)
         let missingIdentityTransport = LiveSlotSettingsTransport(

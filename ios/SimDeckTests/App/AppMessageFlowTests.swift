@@ -524,7 +524,7 @@ final class AppMessageFlowTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(model.conversations.first).unreadCount, 1)
     }
 
-    func testRetryRejectsRemovedLineBeforeTransport() async throws {
+    func testRetryDelegatesRemovedLineAvailabilityToServer() async throws {
         let failedMessage = MessageItem(
             id: UUID(),
             direction: .sent,
@@ -548,15 +548,10 @@ final class AppMessageFlowTests: XCTestCase {
             messages: .loaded([conversation])
         )
 
-        do {
-            try await model.retryMessage(id: failedMessage.id)
-            XCTFail("Expected removed line rejection")
-        } catch {
-            XCTAssertEqual(error as? ServerConnectionError, .deviceUnavailable)
-        }
+        try await model.retryMessage(id: failedMessage.id)
 
-        XCTAssertTrue(transport.sent.isEmpty)
-        XCTAssertEqual(model.messageItems.first?.status, .failed)
+        XCTAssertEqual(transport.sent.count, 1)
+        XCTAssertEqual(model.messageItems.first?.status, .sent)
     }
 
     func testForegroundRefreshSynchronizesMessagesWhenPushIsUnavailable() async {
@@ -568,25 +563,19 @@ final class AppMessageFlowTests: XCTestCase {
         XCTAssertEqual(transport.synchronizedLineIDs, [[firstLine.id, secondLine.id]])
     }
 
-    func testSendRejectsOfflineLineBeforeTransport() async {
+    func testSendDelegatesOfflineLineAvailabilityToServer() async {
         var offlineLine = firstLine
         offlineLine.isOnline = false
         let transport = MessageTransportFake()
         let model = makeModel(transport: transport, devices: [offlineLine])
 
-        do {
-            try await model.sendMessage(
-                lineID: offlineLine.id,
-                remoteNumber: "10086",
-                body: "hello"
-            )
-            XCTFail("Expected offline line rejection")
-        } catch {
-            XCTAssertEqual(error as? ServerConnectionError, .deviceUnavailable)
-        }
+        _ = try? await model.sendMessage(
+            lineID: offlineLine.id,
+            remoteNumber: "10086",
+            body: "hello"
+        )
 
-        XCTAssertTrue(transport.sent.isEmpty)
-        XCTAssertTrue(model.messageItems.isEmpty)
+        XCTAssertEqual(transport.sent.count, 1)
     }
 
     func testMessageNotificationSelectionRoutesToItsConversation() async {

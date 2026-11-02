@@ -118,10 +118,25 @@ struct EncryptedEventEnvelope: Decodable, Equatable, Sendable {
 struct EncryptedEventPage: Decodable, Equatable, Sendable {
     let events: [EncryptedEventEnvelope]
     let nextSequence: Int64
+    let isHeartbeat: Bool
+
+    init(events: [EncryptedEventEnvelope], nextSequence: Int64, isHeartbeat: Bool = false) {
+        self.events = events
+        self.nextSequence = nextSequence
+        self.isHeartbeat = isHeartbeat
+    }
 
     enum CodingKeys: String, CodingKey {
         case events
         case nextSequence = "next_sequence"
+        case isHeartbeat = "heartbeat"
+    }
+
+    init(from decoder: Swift.Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        events = try values.decode([EncryptedEventEnvelope].self, forKey: .events)
+        nextSequence = try values.decode(Int64.self, forKey: .nextSequence)
+        isHeartbeat = try values.decodeIfPresent(Bool.self, forKey: .isHeartbeat) ?? false
     }
 }
 
@@ -904,11 +919,9 @@ final class ServerConnectionManager {
             let devices = try body.devices.flatMap { device in
                 guard let deviceUUID = UUID(uuidString: device.deviceUuid) else { throw ServerConnectionError.invalidResponse }
                 let lastSeenAt = device.hasLastSeenAt ? device.lastSeenAt.date : nil
-                let recentlySeen = Self.isFresh(lastSeenAt, now: now)
-                let isOnline = recentlySeen && device.commandPublicKey.count == 32
+                let isOnline = device.online
                 let radioUpdatedAt = device.hasRadioStatusUpdatedAt ? device.radioStatusUpdatedAt.date : nil
-                let hasFreshRadioStatus = Self.isFresh(radioUpdatedAt, now: now)
-                let radioStatus: CellularRadioStatus? = if isOnline && hasFreshRadioStatus {
+                let radioStatus: CellularRadioStatus? = if device.radioStatusAvailable {
                     CellularRadioStatus(
                         technology: CellularRadioAccessTechnology(rawValue: device.radioAccessTechnology) ?? .unknown,
                         signalBars: device.hasSignalBars ? Int(device.signalBars) : nil
@@ -925,7 +938,7 @@ final class ServerConnectionManager {
                 } else {
                     profile = .empty
                 }
-                let slots = device.slots.isEmpty ? [ServerDeviceSlot(slotID: nil, simID: nil, numericID: Int(device.numericID), profileCiphertext: nil, radioAccessTechnology: CellularRadioAccessTechnology(rawValue: device.radioAccessTechnology), signalBars: device.hasSignalBars ? Int(device.signalBars) : nil, radioStatusUpdatedAt: radioUpdatedAt)] : device.slots.map { ServerDeviceSlot(slotID: UUID(uuidString: $0.slotID), simID: $0.hasSimID ? UUID(uuidString: $0.simID) : nil, numericID: $0.hasSimNumericID ? Int($0.simNumericID) : nil, profileCiphertext: $0.profileCiphertext, radioAccessTechnology: CellularRadioAccessTechnology(rawValue: $0.radioAccessTechnology), signalBars: $0.hasSignalBars ? Int($0.signalBars) : nil, radioStatusUpdatedAt: $0.hasRadioStatusUpdatedAt ? $0.radioStatusUpdatedAt.date : nil, slotKey: $0.slotKey, slotIndex: Int($0.slotIndex)) }
+                let slots = device.slots.isEmpty ? [ServerDeviceSlot(slotID: nil, simID: nil, numericID: Int(device.numericID), profileCiphertext: nil, radioAccessTechnology: CellularRadioAccessTechnology(rawValue: device.radioAccessTechnology), signalBars: device.hasSignalBars ? Int(device.signalBars) : nil, radioStatusUpdatedAt: radioUpdatedAt, radioStatusAvailable: device.radioStatusAvailable)] : device.slots.map { ServerDeviceSlot(slotID: UUID(uuidString: $0.slotID), simID: $0.hasSimID ? UUID(uuidString: $0.simID) : nil, numericID: $0.hasSimNumericID ? Int($0.simNumericID) : nil, profileCiphertext: $0.profileCiphertext, radioAccessTechnology: CellularRadioAccessTechnology(rawValue: $0.radioAccessTechnology), signalBars: $0.hasSignalBars ? Int($0.signalBars) : nil, radioStatusUpdatedAt: $0.hasRadioStatusUpdatedAt ? $0.radioStatusUpdatedAt.date : nil, radioStatusAvailable: $0.radioStatusAvailable, slotKey: $0.slotKey, slotIndex: Int($0.slotIndex)) }
                 return try slots.map { slot in
                     let slotProfile: DeviceProfile
                     if let ciphertext = slot.profileCiphertext, !ciphertext.isEmpty, let profileKey {
@@ -933,8 +946,7 @@ final class ServerConnectionManager {
                     } else {
                         slotProfile = profile
                     }
-                    let slotFresh = Self.isFresh(slot.radioStatusUpdatedAt, now: now)
-                    let slotRadioStatus: CellularRadioStatus? = if isOnline && slotFresh {
+                    let slotRadioStatus: CellularRadioStatus? = if slot.radioStatusAvailable {
                         CellularRadioStatus(technology: slot.radioAccessTechnology ?? .unknown, signalBars: slot.signalBars)
                     } else { radioStatus }
                     return DeviceLineIdentity(
@@ -1190,12 +1202,6 @@ final class ServerConnectionManager {
         ).result.get()
     }
 
-    private static func isFresh(_ date: Date?, now: Date) -> Bool {
-        guard let date else { return false }
-        let age = now.timeIntervalSince(date)
-        return age >= 0 && age < 60
-    }
-
     func commandRecipient(deviceID: UUID) async throws -> Data {
         let (service, token) = try await ownerService()
         let response = try await service.getCommandRecipient(request: .with { $0.deviceUuid = deviceID.uuidString.lowercased() }, headers: ["authorization": ["Bearer \(token)"]]).result.get()
@@ -1218,7 +1224,6 @@ final class ServerConnectionManager {
             currentLine = candidates.count == 1 ? candidates[0] : nil
         }
         guard let currentLine,
-              currentLine.isOnline,
               let publicKey = currentLine.commandPublicKey,
               publicKey.count == 32 else {
             throw ServerConnectionError.deviceUnavailable
@@ -1610,6 +1615,7 @@ private struct ServerDeviceSlot: Decodable {
     let radioAccessTechnology: CellularRadioAccessTechnology?
     let signalBars: Int?
     let radioStatusUpdatedAt: Date?
+    let radioStatusAvailable: Bool
     let slotKey: String
     let slotIndex: Int
 
@@ -1621,11 +1627,26 @@ private struct ServerDeviceSlot: Decodable {
         case radioAccessTechnology = "radio_access_technology"
         case signalBars = "signal_bars"
         case radioStatusUpdatedAt = "radio_status_updated_at"
+        case radioStatusAvailable = "radio_status_available"
         case slotKey = "slot_key"
         case slotIndex = "slot_index"
     }
 
-    init(slotID: UUID?, simID: UUID?, numericID: Int?, profileCiphertext: Data?, radioAccessTechnology: CellularRadioAccessTechnology?, signalBars: Int?, radioStatusUpdatedAt: Date?, slotKey: String = "1", slotIndex: Int = 1) {
+    init(from decoder: Swift.Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        slotID = try values.decodeIfPresent(UUID.self, forKey: .slotID)
+        simID = try values.decodeIfPresent(UUID.self, forKey: .simID)
+        numericID = try values.decodeIfPresent(Int.self, forKey: .numericID)
+        profileCiphertext = try values.decodeIfPresent(Data.self, forKey: .profileCiphertext)
+        radioAccessTechnology = try values.decodeIfPresent(CellularRadioAccessTechnology.self, forKey: .radioAccessTechnology)
+        signalBars = try values.decodeIfPresent(Int.self, forKey: .signalBars)
+        radioStatusUpdatedAt = try values.decodeIfPresent(Date.self, forKey: .radioStatusUpdatedAt)
+        radioStatusAvailable = try values.decodeIfPresent(Bool.self, forKey: .radioStatusAvailable) ?? false
+        slotKey = try values.decodeIfPresent(String.self, forKey: .slotKey) ?? "1"
+        slotIndex = try values.decodeIfPresent(Int.self, forKey: .slotIndex) ?? 1
+    }
+
+    init(slotID: UUID?, simID: UUID?, numericID: Int?, profileCiphertext: Data?, radioAccessTechnology: CellularRadioAccessTechnology?, signalBars: Int?, radioStatusUpdatedAt: Date?, radioStatusAvailable: Bool = false, slotKey: String = "1", slotIndex: Int = 1) {
         self.slotID = slotID
         self.simID = simID
         self.numericID = numericID
@@ -1633,6 +1654,7 @@ private struct ServerDeviceSlot: Decodable {
         self.radioAccessTechnology = radioAccessTechnology
         self.signalBars = signalBars
         self.radioStatusUpdatedAt = radioStatusUpdatedAt
+        self.radioStatusAvailable = radioStatusAvailable
         self.slotKey = slotKey
         self.slotIndex = slotIndex
     }

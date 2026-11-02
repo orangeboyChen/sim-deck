@@ -255,9 +255,11 @@ final class ServerConnectionManagerTests: XCTestCase {
                       "command_public_key":"\(commandKey.base64EncodedString())",
                       "paired_at":"2026-10-16T00:00:00Z",
                       "last_seen_at":"2026-10-16T00:00:30Z",
+                      "online":true,
                       "radio_access_technology":"lte",
                       "signal_bars":3,
-                      "radio_status_updated_at":"2026-10-16T00:00:40Z"
+                      "radio_status_updated_at":"2026-10-16T00:00:40Z",
+                      "radio_status_available":true
                     },{
                       "device_uuid":"\(futureDeviceID.uuidString.lowercased())",
                       "numeric_id":4,
@@ -266,6 +268,7 @@ final class ServerConnectionManagerTests: XCTestCase {
                       "command_public_key":"\(commandKey.base64EncodedString())",
                       "paired_at":"2026-10-16T00:00:00Z",
                       "last_seen_at":"2026-10-16T00:02:00Z"
+                      ,"online":false
                     }]}
                     """
                 )
@@ -328,18 +331,22 @@ final class ServerConnectionManagerTests: XCTestCase {
                   "identity_public_key":"\(identityKey.base64EncodedString())",
                   "command_public_key":"\(commandKey.base64EncodedString())",
                   "last_seen_at":"2026-10-16T00:00:50Z",
+                  "online":true,
                   "radio_access_technology":"lte",
                   "signal_bars":4,
-                  "radio_status_updated_at":"2026-10-16T00:00:00Z"
+                  "radio_status_updated_at":"2026-10-16T00:00:00Z",
+                  "radio_status_available":false
                 },{
                   "device_uuid":"\(invalidBarsDeviceID.uuidString.lowercased())",
                   "numeric_id":2,
                   "identity_public_key":"\(identityKey.base64EncodedString())",
                   "command_public_key":"\(commandKey.base64EncodedString())",
                   "last_seen_at":"2026-10-16T00:00:50Z",
+                  "online":true,
                   "radio_access_technology":"nr_sa",
                   "signal_bars":9,
-                  "radio_status_updated_at":"2026-10-16T00:00:50Z"
+                  "radio_status_updated_at":"2026-10-16T00:00:50Z",
+                  "radio_status_available":true
                 }]}
                 """
             )

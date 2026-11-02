@@ -142,7 +142,7 @@ final class LiveSlotSettingsTransport: SlotSettingsTransport {
     }
 
     func restartModem(line: DeviceLineIdentity) async throws {
-        guard line.isOnline, commandSigner.identity != nil else {
+        guard commandSigner.identity != nil else {
             throw SlotSettingsTransportError.unavailable
         }
         let target = try await api.commandTarget(for: line)
@@ -173,7 +173,7 @@ final class LiveSlotSettingsTransport: SlotSettingsTransport {
         _ settings: SlotSettings?,
         line: DeviceLineIdentity
     ) async throws -> SlotSettings {
-        guard line.isOnline, commandSigner.identity != nil else {
+        guard commandSigner.identity != nil else {
             throw SlotSettingsTransportError.unavailable
         }
         let target = try await api.commandTarget(for: line)
@@ -206,7 +206,7 @@ final class LiveSlotSettingsTransport: SlotSettingsTransport {
         target: EncryptedCommandTarget,
         line: DeviceLineIdentity
     ) async throws -> CallCommandResult {
-        guard line.isOnline, let installationIdentity = commandSigner.identity else {
+        guard let installationIdentity = commandSigner.identity else {
             throw SlotSettingsTransportError.unavailable
         }
         let commandID = makeCommandID()

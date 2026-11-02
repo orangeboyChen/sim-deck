@@ -100,6 +100,16 @@ struct RootTabView: View {
                 .zIndex(1)
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if model.isServerConnectionDegraded {
+                Label("Network connection is unstable", systemImage: "wifi.exclamationmark")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(.orange)
+            }
+        }
         .animation(.easeInOut(duration: 0.2), value: model.callCoordinator.activeCall != nil)
     }
 

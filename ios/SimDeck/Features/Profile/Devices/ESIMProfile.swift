@@ -169,7 +169,7 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
         activationCode: String? = nil,
         line: DeviceLineIdentity
     ) async throws -> CallCommandResult {
-        guard line.isOnline, commandSigner.identity != nil else {
+        guard commandSigner.identity != nil else {
             throw ESIMProfileManagerError.unavailable
         }
         let target = try await api.commandTarget(for: line)
