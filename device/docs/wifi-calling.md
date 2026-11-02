@@ -16,6 +16,15 @@ active SIM's IMSI through its serialized AT connection, derives possible 2- and
 network. The IMSI is not persisted or returned to the app. A manual refresh
 repeats the diagnostic.
 
+`SIM_DECK_VOWIFI_AT_BRIDGE=true` starts a private Unix AT endpoint at
+`<state-directory>/ims-at.sock` (in automatic discovery mode, each modem gets
+its own state directory). A trusted companion IMS process can use this endpoint
+through a serial-to-Unix-socket adapter. Commands are sent through the same
+serialized modem client used by calls, SMS, and eSIM management, so the IMS
+process must not open the modem TTY directly. The socket is mode `0600` and
+must be mounted only into the companion process. The bridge is an AT transport;
+it does not perform ePDG attachment, IMS registration, or voice routing.
+
 | Status | Meaning |
 | --- | --- |
 | `inactive_profile` | This eSIM profile is not active, so it cannot be probed. |

@@ -34,6 +34,7 @@ import (
 	"sim-deck-device/internal/serverapi"
 	"sim-deck-device/internal/slotpolicy"
 	"sim-deck-device/internal/sms"
+	"sim-deck-device/internal/vowifi/atbridge"
 )
 
 var errSIMIdentityChanged = errors.New("SIM identity changed; restart the device agent to reload event identity")
@@ -525,7 +526,6 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	if err != nil {
 		return fmt.Errorf("open slot policy: %w", err)
 	}
-
 	inbox, err := dependencies.openInbox(
 		filepath.Join(config.StateDirectory, "sms-inbox.json"),
 		365*24*time.Hour,
@@ -643,6 +643,13 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	}
 	if err := dependencies.configureAudio(ctx, config, client); err != nil {
 		return fmt.Errorf("configure modem audio: %w", err)
+	}
+	if config.VoWiFiATBridge {
+		bridge, err := atbridge.Start(ctx, filepath.Join(config.StateDirectory, "ims-at.sock"), client, config.CommandTimeout)
+		if err != nil {
+			return fmt.Errorf("start IMS AT bridge: %w", err)
+		}
+		defer bridge.Close()
 	}
 	ready.Store(true)
 	defer ready.Store(false)

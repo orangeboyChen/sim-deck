@@ -70,6 +70,7 @@ type Config struct {
 	ServerURL             string
 	StateDirectory        string
 	AllowInsecureHTTP     bool
+	VoWiFiATBridge        bool
 }
 
 // LoadConfig reads agent configuration from an environment lookup function.
@@ -128,6 +129,13 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 			return Config{}, fmt.Errorf("SIM_DECK_ALLOW_INSECURE_HTTP must be a boolean")
 		}
 		config.AllowInsecureHTTP = allow
+	}
+	if value, ok := lookup("SIM_DECK_VOWIFI_AT_BRIDGE"); ok && strings.TrimSpace(value) != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("SIM_DECK_VOWIFI_AT_BRIDGE must be a boolean")
+		}
+		config.VoWiFiATBridge = enabled
 	}
 
 	if value, ok := lookup("SIM_DECK_BAUD"); ok && strings.TrimSpace(value) != "" {
