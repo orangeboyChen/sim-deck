@@ -315,7 +315,7 @@ final class LiveESIMProfileManager: ESIMProfileManaging {
         let simID = try requireSIMID(line)
         let modemProfiles = try await device.list(line: line)
         guard !modemProfiles.isEmpty else { return [] }
-        let metadata = try await metadataStore.listESIMProfiles(simID: simID)
+        let metadata = (try? await metadataStore.listESIMProfiles(simID: simID)) ?? []
         return modemProfiles.map { profile in
             let stored = metadata.first { $0.profileID == profile.profileID }
             return makeProfile(profile, metadata: stored)

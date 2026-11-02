@@ -11,7 +11,7 @@ final class ESIMProfileTests: XCTestCase {
     func testEmptyModemProfileListDoesNotRequireServerMetadata() async throws {
         let metadata = ESIMMetadataStoreFake()
         metadata.listError = TestError.failed
-        let manager = LiveESIMProfileManager(metadataStore: metadata, device: EmptyESIMDeviceTransport())
+        let manager = LiveESIMProfileManager(metadataStore: metadata, device: FakeESIMDeviceTransport())
         let line = DeviceLineIdentity(
             id: UUID(),
             deviceID: UUID(),
@@ -28,6 +28,39 @@ final class ESIMProfileTests: XCTestCase {
         let profiles = try await manager.loadProfiles(line: line)
         XCTAssertEqual(profiles, [])
         XCTAssertEqual(metadata.listCalls, 0)
+    }
+
+    @MainActor
+    func testModemProfilesRemainAvailableWhenServerMetadataFails() async throws {
+        let metadata = ESIMMetadataStoreFake()
+        metadata.listError = TestError.failed
+        let device = FakeESIMDeviceTransport(profiles: [
+            DeviceESIMProfile(
+                profileID: "89000000000000000001",
+                iccid: "89000000000000000001",
+                enabled: false,
+                nickname: "",
+                provider: ""
+            )
+        ])
+        let manager = LiveESIMProfileManager(metadataStore: metadata, device: device)
+        let line = DeviceLineIdentity(
+            id: UUID(),
+            deviceID: UUID(),
+            simID: UUID(),
+            numericID: 2,
+            deviceName: "Modem",
+            lineName: "",
+            phoneNumber: "",
+            isOnline: true,
+            commandPublicKey: nil,
+            simKind: .eSIM
+        )
+
+        let profiles = try await manager.loadProfiles(line: line)
+        XCTAssertEqual(profiles.map(\.profileID), ["89000000000000000001"])
+        XCTAssertEqual(profiles.first?.iccid, "89000000000000000001")
+        XCTAssertEqual(metadata.listCalls, 1)
     }
 
     func testSuccessfulCommandWithoutProfilesIsAnEmptyList() throws {
@@ -69,8 +102,14 @@ final class ESIMProfileTests: XCTestCase {
 }
 
 @MainActor
-private final class EmptyESIMDeviceTransport: ESIMDeviceProfileTransport {
-    func list(line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] { [] }
+private final class FakeESIMDeviceTransport: ESIMDeviceProfileTransport {
+    let profiles: [DeviceESIMProfile]
+
+    init(profiles: [DeviceESIMProfile] = []) {
+        self.profiles = profiles
+    }
+
+    func list(line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] { profiles }
     func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] { [] }
     func setEnabled(_ enabled: Bool, profileID: String, line: DeviceLineIdentity) async throws {}
     func rename(_ name: String, profileID: String, line: DeviceLineIdentity) async throws {}
