@@ -114,6 +114,11 @@ struct ESIMManagementScreen: View {
 
     private func replace(_ profile: ESIMProfile) {
         guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
+        if profile.isEnabled {
+            for existingIndex in profiles.indices where existingIndex != index {
+                profiles[existingIndex].isEnabled = false
+            }
+        }
         profiles[index] = profile
     }
 }
@@ -163,6 +168,7 @@ private struct ESIMProfileDetailScreen: View {
     @State private var isWorking = false
     @State private var isConfirmingDelete = false
     @State private var errorDescription: String?
+    @State private var profileSettings: SlotSettings?
 
     init(
         model: AppModel,
@@ -202,6 +208,25 @@ private struct ESIMProfileDetailScreen: View {
                 }
             }
 
+            Section("Service Preferences") {
+                if let profileSettings {
+                    LabeledContent("Mobile Data", value: profileSettings.dataEnabled ? String(localized: "On") : String(localized: "Off"))
+                    LabeledContent("VoLTE", value: profileSettings.volteEnabled ? String(localized: "On") : String(localized: "Off"))
+                    LabeledContent("Wi-Fi Calling", value: wifiCallingSummary(profileSettings))
+                }
+                if profile.isEnabled {
+                    Text("Edit this plan's controls in SIM Card settings.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    NavigationLink("Edit Plan Preferences") {
+                        SlotSettingsScreen(
+                            model: model, line: line, profileID: profile.profileID,
+                            profileName: profile.displayName, isActiveProfile: false
+                        )
+                    }
+                }
+            }
+
             if let errorDescription {
                 Section {
                     Label(errorDescription, systemImage: "exclamationmark.triangle")
@@ -235,6 +260,26 @@ private struct ESIMProfileDetailScreen: View {
             Text("This removes the profile from the eSIM. It cannot be restored from Sim Deck.")
         }
         .scrollEdgeEffectStyle(.soft, for: .all)
+        .onAppear { Task { await loadProfileSettings() } }
+    }
+
+    private func loadProfileSettings() async {
+        do {
+            profileSettings = try await model.loadSlotSettings(line: line, profileID: profile.profileID)
+        } catch {
+            profileSettings = nil
+        }
+    }
+
+    private func wifiCallingSummary(_ settings: SlotSettings) -> String {
+        guard settings.wifiCallingEnabled else { return String(localized: "Off") }
+        if !profile.isEnabled { return String(localized: "Saved for this plan") }
+        switch settings.wifiCallingStatus {
+        case "gateway_found": return String(localized: "Gateway found; calling unavailable")
+        case "gateway_not_found": return String(localized: "No standard gateway found")
+        case "probe_failed": return String(localized: "Check failed")
+        default: return String(localized: "Not checked")
+        }
     }
 
     private func updateEnabled(_ enabled: Bool) {
@@ -246,6 +291,7 @@ private struct ESIMProfileDetailScreen: View {
                 profile = updated
                 onChange(updated)
                 errorDescription = nil
+                await loadProfileSettings()
             } catch {
                 errorDescription = error.localizedDescription
             }

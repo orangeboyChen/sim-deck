@@ -28,6 +28,8 @@ final class SlotSettingsTransportTests: XCTestCase {
         XCTAssertNil(payload.incomingCallsEnabled)
         XCTAssertNil(payload.incomingSMSEnabled)
         XCTAssertNil(payload.volteEnabled)
+        XCTAssertNil(payload.wifiCallingEnabled)
+        XCTAssertNil(payload.esimProfileID)
         let serverVisible = String(decoding: try JSONEncoder().encode(api.requests[0]), as: UTF8.self)
         XCTAssertFalse(serverVisible.contains("slot.configure"))
         XCTAssertFalse(serverVisible.contains("incoming_sms_enabled"))
@@ -41,7 +43,8 @@ final class SlotSettingsTransportTests: XCTestCase {
             airplaneModeEnabled: true,
             incomingCallsEnabled: false,
             incomingSMSEnabled: false,
-            volteEnabled: true
+            volteEnabled: true,
+            wifiCallingEnabled: true
         )
 
         let effective = try await transport.update(requested, line: line(commandKey: api.commandPublicKey))
@@ -53,6 +56,32 @@ final class SlotSettingsTransportTests: XCTestCase {
         XCTAssertEqual(payload.incomingCallsEnabled, false)
         XCTAssertEqual(payload.incomingSMSEnabled, false)
         XCTAssertEqual(payload.volteEnabled, true)
+        XCTAssertEqual(payload.wifiCallingEnabled, true)
+    }
+
+    func testProfileControlsAndGatewayProbeUseEncryptedProfileID() async throws {
+        let api = try SlotSettingsAPIFake(deviceID: deviceID)
+        let transport = makeTransport(api: api)
+        let profileID = "89000000000000000001"
+        let line = line(commandKey: api.commandPublicKey)
+
+        _ = try await transport.load(line: line, profileID: profileID)
+        XCTAssertEqual(api.payloads.last?.esimProfileID, profileID)
+        XCTAssertNil(api.payloads.last?.wifiCallingEnabled)
+
+        var updated = api.settings
+        updated.wifiCallingEnabled = true
+        _ = try await transport.update(updated, line: line, profileID: profileID)
+        XCTAssertEqual(api.payloads.last?.esimProfileID, profileID)
+        XCTAssertEqual(api.payloads.last?.wifiCallingEnabled, true)
+
+        _ = try await transport.probeWiFiCalling(line: line, profileID: profileID)
+        XCTAssertEqual(api.payloads.last?.operation, "slot.probe_vowifi")
+        XCTAssertEqual(api.payloads.last?.esimProfileID, profileID)
+        XCTAssertNil(api.payloads.last?.wifiCallingEnabled)
+        let serverVisible = String(decoding: try JSONEncoder().encode(api.requests.last!), as: UTF8.self)
+        XCTAssertFalse(serverVisible.contains(profileID))
+        XCTAssertFalse(serverVisible.contains("slot.probe_vowifi"))
     }
 
     func testLoadUsesFreshServerAssignmentInsteadOfStaleScreenIdentifiers() async throws {

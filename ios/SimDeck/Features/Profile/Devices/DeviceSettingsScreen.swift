@@ -147,6 +147,8 @@ struct SIMSettingsScreen: View {
     @State private var originalSlotSettings: SlotSettings?
     @State private var isLoadingControls = true
     @State private var isWorking = false
+    @State private var isProbingWiFiCalling = false
+    @State private var activeESIMProfileName: String?
     @State private var showsVoLTERestartConfirmation = false
 
     init(model: AppModel, line: DeviceLineIdentity) {
@@ -184,9 +186,21 @@ struct SIMSettingsScreen: View {
                 } footer: {
                     Text("Manage the cellular profiles installed on this eSIM.")
                 }
+                if let activeESIMProfileName {
+                    Section("Current eSIM Plan") {
+                        LabeledContent("Plan", value: activeESIMProfileName)
+                    }
+                }
             }
             if let slotSettings {
                 SlotControlSection(settings: slotSettingsBinding(for: slotSettings))
+                WiFiCallingSection(
+                    settings: slotSettingsBinding(for: slotSettings),
+                    canRefresh: slotSettings.wifiCallingEnabled && slotSettings == originalSlotSettings
+                        && !isWorking && !isProbingWiFiCalling && line.isOnline,
+                    isProbing: isProbingWiFiCalling,
+                    refresh: probeWiFiCalling
+                )
             } else if isLoadingControls {
                 Section("Slot Controls") {
                     HStack {
@@ -228,7 +242,12 @@ struct SIMSettingsScreen: View {
                 }
             }
         }
-        .task { await loadSlotSettings() }
+        .onAppear {
+            Task {
+                await loadSlotSettings()
+                if line.simKind == .eSIM { await loadActiveESIMProfile() }
+            }
+        }
         .interactiveDismissDisabled(isWorking)
         .confirmationDialog(
             "Restart Modem to Apply VoLTE?",
@@ -253,7 +272,7 @@ struct SIMSettingsScreen: View {
     }
 
     private var canSave: Bool {
-        guard model.canEditDeviceProfiles, !isWorking else { return false }
+        guard model.canEditDeviceProfiles, !isWorking, !isProbingWiFiCalling else { return false }
         let identityChanged = numericID != line.numericID
             || lineName != line.lineName
             || phoneNumber != line.phoneNumber
@@ -278,6 +297,10 @@ struct SIMSettingsScreen: View {
         }
         isLoadingControls = line.isOnline
         controlErrorDescription = nil
+        if line.simKind == .eSIM {
+            slotSettings = nil
+            originalSlotSettings = nil
+        }
         guard line.isOnline else { return }
         do {
             let loaded = try await model.loadSlotSettings(line: line)
@@ -287,6 +310,31 @@ struct SIMSettingsScreen: View {
             controlErrorDescription = error.localizedDescription
         }
         isLoadingControls = false
+    }
+
+    private func loadActiveESIMProfile() async {
+        activeESIMProfileName = nil
+        do {
+            let profiles = try await model.loadESIMProfiles(line: line)
+            activeESIMProfileName = profiles.first(where: \.isEnabled)?.displayName
+        } catch {
+            activeESIMProfileName = nil
+        }
+    }
+
+    private func probeWiFiCalling() {
+        Task {
+            isProbingWiFiCalling = true
+            controlErrorDescription = nil
+            do {
+                let checked = try await model.probeWiFiCalling(line: line)
+                slotSettings = checked
+                originalSlotSettings = checked
+            } catch {
+                controlErrorDescription = error.localizedDescription
+            }
+            isProbingWiFiCalling = false
+        }
     }
 
     private func save(restartModem: Bool) {
