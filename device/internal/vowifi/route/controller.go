@@ -157,9 +157,7 @@ func (controller *Controller) publish(snapshot call.Snapshot) {
 func (controller *Controller) Run(ctx context.Context) error {
 	cellularEvents := controller.cellular.Events()
 	line := controller.currentLine()
-	lineContext, lineCancel := context.WithCancel(ctx)
-	lineResult := make(chan error, 1)
-	go func() { lineResult <- line.Run(lineContext) }()
+	lineCancel, lineResult := runLine(ctx, line)
 	incomingCalls := line.IncomingCalls()
 	retry := time.NewTicker(controller.retryDelay)
 	defer retry.Stop()
@@ -207,9 +205,7 @@ func (controller *Controller) Run(ctx context.Context) error {
 			}
 			line = next
 			controller.setLine(next)
-			lineContext, lineCancel = context.WithCancel(ctx)
-			lineResult = make(chan error, 1)
-			go func(result chan error, runCtx context.Context) { result <- next.Run(runCtx) }(lineResult, lineContext)
+			lineCancel, lineResult = runLine(ctx, next)
 			incomingCalls = next.IncomingCalls()
 		case snapshot := <-cellularEvents:
 			controller.mu.RLock()
@@ -239,6 +235,16 @@ func (controller *Controller) Run(ctx context.Context) error {
 			go controller.watch(item, incoming)
 		}
 	}
+}
+
+func runLine(ctx context.Context, line Line) (context.CancelFunc, <-chan error) {
+	lineContext, cancel := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	go func() {
+		defer cancel()
+		result <- line.Run(lineContext)
+	}()
+	return cancel, result
 }
 
 func (controller *Controller) currentLine() Line {
