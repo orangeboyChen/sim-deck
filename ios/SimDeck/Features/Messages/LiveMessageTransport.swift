@@ -729,6 +729,7 @@ struct IncomingSIMProfilePayload: Codable, Equatable, Sendable {
     let phoneNumber: String
     let lineName: String
     let simKind: String?
+    let eid: String?
     let installationID: UUID
 
     enum CodingKeys: String, CodingKey {
@@ -740,6 +741,7 @@ struct IncomingSIMProfilePayload: Codable, Equatable, Sendable {
         case phoneNumber = "phone_number"
         case lineName = "line_name"
         case simKind = "sim_kind"
+        case eid
         case installationID = "installation_id"
     }
 }
@@ -806,7 +808,7 @@ enum EncryptedSIMProfileEventCodec {
               payload.numericID <= 99,
               payload.lineName.count <= 64,
               payload.phoneNumber.isEmpty || DialString.isValid(normalizedNumber),
-              !normalizedNumber.isEmpty || !normalizedLineName.isEmpty else {
+              !normalizedNumber.isEmpty || !normalizedLineName.isEmpty || (payload.simKind == "eSIM" && !(payload.eid ?? "").isEmpty) else {
             throw LiveMessageTransportError.invalidResponse
         }
         return payload

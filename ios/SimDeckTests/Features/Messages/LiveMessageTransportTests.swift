@@ -292,6 +292,19 @@ final class LiveMessageTransportTests: XCTestCase {
         XCTAssertFalse(serverVisibleEvent.contains("CHINA MOBILE"))
     }
 
+    func testSynchronizeDetectsEUICCWithoutAnActiveProfile() async throws {
+        let api = try MessageCommandAPIFake(deviceID: deviceID, outcome: .success)
+        try api.appendSIMProfile(phoneNumber: "", lineName: "", simKind: "eSIM", eid: "89086030202200000026000455069085")
+        let transport = makeTransport(api: api)
+
+        let batch = try await transport.synchronize(lines: [api.line])
+
+        XCTAssertEqual(
+            batch.detectedSIMProfiles,
+            [DetectedSIMProfile(lineID: api.line.id, lineName: "", phoneNumber: "", simKind: .eSIM)]
+        )
+    }
+
     func testSynchronizeRejectsSIMProfileForReplacedCardInSameSlot() async throws {
         let api = try MessageCommandAPIFake(deviceID: deviceID, outcome: .success)
         let slotID = UUID(uuidString: "01900000-0000-7000-8000-000000000303")!
@@ -654,6 +667,8 @@ private final class MessageCommandAPIFake: EncryptedCallCommandAPI {
     func appendSIMProfile(
         phoneNumber: String,
         lineName: String,
+        simKind: String? = nil,
+        eid: String? = nil,
         slotID: UUID? = nil,
         simID: UUID? = nil
     ) throws {
@@ -667,7 +682,8 @@ private final class MessageCommandAPIFake: EncryptedCallCommandAPI {
             numericID: line.numericID,
             phoneNumber: phoneNumber,
             lineName: lineName,
-            simKind: nil,
+            simKind: simKind,
+            eid: eid,
             installationID: installationIdentity.id
         )
         let nonce = Data(repeating: UInt8(sequence), count: 12)
