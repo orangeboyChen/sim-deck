@@ -31,11 +31,16 @@ type testLine struct {
 	dialed     chan string
 	answer     chan SIPCall
 	registered bool
+	stop       chan error
 }
 
 func (line *testLine) Run(ctx context.Context) error {
-	<-ctx.Done()
-	return ctx.Err()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-line.stop:
+		return err
+	}
 }
 func (line *testLine) Registered() bool              { return line.registered }
 func (line *testLine) IncomingCalls() <-chan SIPCall { return line.incoming }
@@ -213,5 +218,40 @@ func TestCanceledWiFiDialUnblocksMedia(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("pending PCM remained blocked after hangup")
+	}
+}
+
+func TestGatewayFailureDoesNotStopCellularAndReopensLine(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	commander := &testCommander{}
+	created := make(chan *testLine, 2)
+	controller, err := NewWithFactory(ctx, call.NewController(commander), func() (Line, error) {
+		line := &testLine{incoming: make(chan SIPCall, 1), dialed: make(chan string, 1),
+			answer: make(chan SIPCall, 1), stop: make(chan error, 1), registered: true}
+		created <- line
+		return line, nil
+	}, func() bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.retryDelay = 10 * time.Millisecond
+	result := make(chan error, 1)
+	go func() { result <- controller.Run(ctx) }()
+	first := <-created
+	first.stop <- errors.New("gateway disconnected")
+	if err := controller.Dial(context.Background(), "1234"); err != nil {
+		t.Fatalf("cellular dial failed while IMS was offline: %v", err)
+	}
+	select {
+	case <-created:
+	case <-time.After(time.Second):
+		t.Fatal("SIP line was not recreated")
+	}
+	cancel()
+	select {
+	case <-result:
+	case <-time.After(time.Second):
+		t.Fatal("call router did not stop")
 	}
 }

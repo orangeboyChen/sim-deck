@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"sync"
+	"time"
 
 	"sim-deck-device/internal/call"
 	"sim-deck-device/internal/media"
@@ -74,10 +76,13 @@ func (session *session) endpoint(ctx context.Context, closed <-chan struct{}) (m
 // Controller routes a slot's calls through either cellular voice or its
 // registered Wi-Fi Calling gateway and emits a single call-state stream.
 type Controller struct {
-	cellular *call.Controller
-	line     Line
-	enabled  func() bool
-	lifetime context.Context
+	cellular   *call.Controller
+	line       Line
+	newLine    func() (Line, error)
+	enabled    func() bool
+	lifetime   context.Context
+	restart    chan struct{}
+	retryDelay time.Duration
 
 	mu          sync.RWMutex
 	active      *session
@@ -91,7 +96,27 @@ func New(ctx context.Context, cellular *call.Controller, line Line, enabled func
 		return nil, errors.New("call route requires a lifetime, cellular controller, SIP line, and policy")
 	}
 	return &Controller{cellular: cellular, line: line, enabled: enabled, lifetime: ctx,
-		snapshot: cellular.Snapshot(), events: make(chan call.Snapshot, 32)}, nil
+		snapshot: cellular.Snapshot(), events: make(chan call.Snapshot, 32), restart: make(chan struct{}, 1),
+		retryDelay: 5 * time.Second}, nil
+}
+
+// NewWithFactory recreates the local SIP registration after gateway failures
+// and eSIM profile changes while leaving cellular service running.
+func NewWithFactory(ctx context.Context, cellular *call.Controller, create func() (Line, error), enabled func() bool) (*Controller, error) {
+	if create == nil {
+		return nil, errors.New("SIP line factory is required")
+	}
+	line, err := create()
+	if err != nil {
+		return nil, err
+	}
+	controller, err := New(ctx, cellular, line, enabled)
+	if err != nil {
+		_ = line.Close()
+		return nil, err
+	}
+	controller.newLine = create
+	return controller, nil
 }
 
 func (controller *Controller) Events() <-chan call.Snapshot { return controller.events }
@@ -129,18 +154,62 @@ func (controller *Controller) publish(snapshot call.Snapshot) {
 
 // Run combines cellular events and SIP dialogs until the device stops.
 func (controller *Controller) Run(ctx context.Context) error {
-	defer controller.line.Close()
-	lineResult := make(chan error, 1)
-	go func() { lineResult <- controller.line.Run(ctx) }()
 	cellularEvents := controller.cellular.Events()
+	line := controller.currentLine()
+	lineContext, lineCancel := context.WithCancel(ctx)
+	lineResult := make(chan error, 1)
+	go func() { lineResult <- line.Run(lineContext) }()
+	incomingCalls := line.IncomingCalls()
+	retry := time.NewTicker(controller.retryDelay)
+	defer retry.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			controller.endActive(context.WithoutCancel(ctx))
+			if line != nil {
+				lineCancel()
+				<-lineResult
+				_ = line.Close()
+			}
 			return ctx.Err()
 		case err := <-lineResult:
 			controller.endActive(context.WithoutCancel(ctx))
-			return fmt.Errorf("IMS gateway line stopped: %w", err)
+			lineCancel()
+			_ = line.Close()
+			if controller.newLine == nil {
+				return fmt.Errorf("IMS gateway line stopped: %w", err)
+			}
+			slog.Warn("IMS gateway line stopped; retrying", "error", err)
+			controller.setLine(nil)
+			line = nil
+			lineResult = nil
+			incomingCalls = nil
+		case <-controller.restart:
+			controller.endActive(context.WithoutCancel(ctx))
+			lineCancel()
+			if line != nil {
+				<-lineResult
+				_ = line.Close()
+			}
+			controller.setLine(nil)
+			line = nil
+			lineResult = nil
+			incomingCalls = nil
+		case <-retry.C:
+			if line != nil || controller.newLine == nil {
+				continue
+			}
+			next, err := controller.newLine()
+			if err != nil {
+				slog.Warn("IMS gateway line retry failed", "error", err)
+				continue
+			}
+			line = next
+			controller.setLine(next)
+			lineContext, lineCancel = context.WithCancel(ctx)
+			lineResult = make(chan error, 1)
+			go func(result chan error, runCtx context.Context) { result <- next.Run(runCtx) }(lineResult, lineContext)
+			incomingCalls = next.IncomingCalls()
 		case snapshot := <-cellularEvents:
 			controller.mu.RLock()
 			busy := controller.active != nil
@@ -150,7 +219,7 @@ func (controller *Controller) Run(ctx context.Context) error {
 			} else if snapshot.State == call.StateRinging || snapshot.State == call.StateWaiting {
 				_ = controller.cellular.Reject(ctx)
 			}
-		case incoming := <-controller.line.IncomingCalls():
+		case incoming := <-incomingCalls:
 			controller.mu.Lock()
 			if controller.active != nil || !controller.enabled() ||
 				(controller.cellular.State() != call.StateIdle && controller.cellular.State() != call.StateEnded) {
@@ -167,11 +236,24 @@ func (controller *Controller) Run(ctx context.Context) error {
 	}
 }
 
+func (controller *Controller) currentLine() Line {
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	return controller.line
+}
+
+func (controller *Controller) setLine(line Line) {
+	controller.mu.Lock()
+	controller.line = line
+	controller.mu.Unlock()
+}
+
 func (controller *Controller) Dial(ctx context.Context, number string) error {
 	if !controller.enabled() {
 		return controller.cellular.Dial(ctx, number)
 	}
-	if !controller.line.Registered() {
+	line := controller.currentLine()
+	if line == nil || !line.Registered() {
 		return errors.New("Wi-Fi Calling gateway is not registered")
 	}
 	if controller.cellular.State() != call.StateIdle && controller.cellular.State() != call.StateEnded {
@@ -191,7 +273,7 @@ func (controller *Controller) Dial(ctx context.Context, number string) error {
 	controller.mu.Unlock()
 	controller.publish(call.Snapshot{State: call.StateDialing})
 	go func() {
-		dialog, err := controller.line.DialCall(dialContext, number, func(status int) {
+		dialog, err := line.DialCall(dialContext, number, func(status int) {
 			if status == 180 || status == 183 {
 				controller.publish(call.Snapshot{State: call.StateDialing})
 			}
@@ -298,7 +380,12 @@ func (controller *Controller) endActive(ctx context.Context) error {
 // InvalidateProfile ends only the SIP call associated with a replaced SIM
 // profile. Cellular calls remain under the modem controller's ownership.
 func (controller *Controller) InvalidateProfile(ctx context.Context) error {
-	return controller.endActive(ctx)
+	err := controller.endActive(ctx)
+	select {
+	case controller.restart <- struct{}{}:
+	default:
+	}
+	return err
 }
 
 func (controller *Controller) Refresh(ctx context.Context) error {

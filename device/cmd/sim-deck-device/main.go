@@ -766,19 +766,16 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	}
 	var calls callRuntime = session.Calls()
 	if config.VoWiFiSIPRegistrar != "" {
-		line, lineError := route.NewLocalLine(sipline.Config{
-			Registrar: config.VoWiFiSIPRegistrar, Username: config.VoWiFiSIPUsername,
-			Password: config.VoWiFiSIPPassword, BindHost: config.VoWiFiSIPBindHost,
-			BindPort: config.VoWiFiSIPBindPort,
-		})
-		if lineError != nil {
-			return fmt.Errorf("create Wi-Fi Calling SIP line: %w", lineError)
-		}
-		wifiCalls, err = route.New(ctx, session.Calls(), line, func() bool {
+		wifiCalls, err = route.NewWithFactory(ctx, session.Calls(), func() (route.Line, error) {
+			return route.NewLocalLine(sipline.Config{
+				Registrar: config.VoWiFiSIPRegistrar, Username: config.VoWiFiSIPUsername,
+				Password: config.VoWiFiSIPPassword, BindHost: config.VoWiFiSIPBindHost,
+				BindPort: config.VoWiFiSIPBindPort,
+			})
+		}, func() bool {
 			return policy.Current().WiFiCallingEnabled && wifiMetrics.Ready()
 		})
 		if err != nil {
-			_ = line.Close()
 			return fmt.Errorf("create Wi-Fi Calling call route: %w", err)
 		}
 		calls = wifiCalls
