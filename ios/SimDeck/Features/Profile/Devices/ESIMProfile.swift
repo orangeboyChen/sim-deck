@@ -130,10 +130,10 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
 
     func list(line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] {
         let result = try await execute(operation: "esim.list", profileID: nil, name: nil, line: line)
-        guard result.success, let profiles = result.esimProfiles else {
+        guard result.success else {
             throw ESIMProfileManagerError.unavailable
         }
-        return profiles
+        return result.esimProfiles ?? []
     }
 
     func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] {
@@ -144,10 +144,10 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
             activationCode: code.trimmingCharacters(in: .whitespacesAndNewlines),
             line: line
         )
-        guard result.success, let profiles = result.esimProfiles else {
+        guard result.success else {
             throw ESIMProfileManagerError.unavailable
         }
-        return profiles
+        return result.esimProfiles ?? []
     }
 
     func setEnabled(_ enabled: Bool, profileID: String, line: DeviceLineIdentity) async throws {

@@ -6,6 +6,15 @@ import XCTest
 @testable import SimDeck
 
 final class ESIMProfileTests: XCTestCase {
+    func testSuccessfulCommandWithoutProfilesIsAnEmptyList() throws {
+        let result = try JSONDecoder().decode(
+            CallCommandResult.self,
+            from: #"{"version":1,"success":true,"call_state":"idle"}"#.data(using: .utf8)!
+        )
+
+        XCTAssertEqual(result.esimProfiles ?? [], [])
+    }
+
     func testDisplayNamePrefersCustomNameThenProfileIDThenICCID() {
         XCTAssertEqual(
             ESIMProfile(profileID: "profile-1", name: "Travel").displayName,
