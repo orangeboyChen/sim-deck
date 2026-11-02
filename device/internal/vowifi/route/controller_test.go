@@ -146,6 +146,9 @@ func TestOutgoingWiFiCallRoutesMediaAndDTMF(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, controller.Events(), call.StateEnded)
+	if err := controller.Hangup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	commander.mu.Lock()
 	defer commander.mu.Unlock()
 	if len(commander.commands) != 0 {

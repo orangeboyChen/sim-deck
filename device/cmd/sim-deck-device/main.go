@@ -643,6 +643,9 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 		if changes, ok := policy.(interface{ SetProfileChanged(func(string)) }); ok {
 			changes.SetProfileChanged(func(string) {
 				wifiMetrics.Invalidate()
+				if writeError := gateway.RequestRestart(config.StateDirectory); writeError != nil {
+					logger.Error("failed to request IMS companion restart after eSIM profile change", "error", writeError)
+				}
 				if wifiCalls != nil {
 					go func() {
 						cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -840,6 +843,10 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	if wifiCalls != nil {
 		workerCount += 2
 	}
+	profileReader, watchesProfiles := session.(esimProfileCommandReader)
+	if eSIMSupported && watchesProfiles {
+		workerCount++
+	}
 	results := make(chan error, workerCount)
 	if wifiCalls != nil {
 		go func() { results <- wifiCalls.Run(runContext) }()
@@ -850,6 +857,11 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	go func() { results <- events.Run(runContext) }()
 	go func() { results <- incomingCalls.Run(runContext) }()
 	go func() { results <- radioStatus.Run(runContext) }()
+	if eSIMSupported && watchesProfiles {
+		go func() {
+			results <- synchronizeActiveESIMProfile(runContext, profileReader, policy, config.RadioStatusPoll, logger)
+		}()
+	}
 	if eSIMSupported {
 		go func() {
 			results <- synchronizeEUICCIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger)
@@ -871,6 +883,46 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 		}
 	}
 	return resultsToCheck[len(resultsToCheck)-1]
+}
+
+func synchronizeActiveESIMProfile(
+	ctx context.Context,
+	reader interface {
+		ListESIMProfiles(context.Context) ([]modem.ESIMProfile, error)
+	},
+	policy interface {
+		SelectProfile(context.Context, string) error
+	},
+	interval time.Duration,
+	logger *slog.Logger,
+) error {
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			profiles, err := reader.ListESIMProfiles(ctx)
+			if err != nil {
+				logger.Warn("active eSIM profile poll failed", "error", err)
+				continue
+			}
+			activeID := ""
+			for _, profile := range profiles {
+				if profile.Enabled {
+					activeID = profile.ICCID
+					break
+				}
+			}
+			if err := policy.SelectProfile(ctx, activeID); err != nil {
+				logger.Warn("active eSIM profile policy could not be synchronized", "error", err)
+			}
+		}
+	}
 }
 
 // synchronizeSIMIdentity detects hot-swapped cards without persisting the ICCID itself.

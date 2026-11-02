@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -125,6 +126,48 @@ type fakeDeviceSession struct {
 	runError        error
 	runStarted      chan struct{}
 	calls           *call.Controller
+}
+
+type profilePollReader struct {
+	profiles []modem.ESIMProfile
+}
+
+func (reader profilePollReader) ListESIMProfiles(context.Context) ([]modem.ESIMProfile, error) {
+	return reader.profiles, nil
+}
+
+type profilePollPolicy struct{ selected chan string }
+
+func (policy profilePollPolicy) SelectProfile(_ context.Context, profileID string) error {
+	select {
+	case policy.selected <- profileID:
+	default:
+	}
+	return nil
+}
+
+func TestActiveESIMProfilePollSelectsExternallySwitchedProfile(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	selected := make(chan string, 1)
+	result := make(chan error, 1)
+	go func() {
+		result <- synchronizeActiveESIMProfile(ctx,
+			profilePollReader{profiles: []modem.ESIMProfile{{ICCID: "89000000000000000001", Enabled: true}}},
+			profilePollPolicy{selected: selected}, time.Millisecond, slog.Default())
+	}()
+	select {
+	case profileID := <-selected:
+		if profileID != "89000000000000000001" {
+			t.Fatalf("selected %q", profileID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active eSIM profile was not selected")
+	}
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("profile poll ended with %v", err)
+	}
 }
 
 func (session *fakeDeviceSession) Calls() *call.Controller { return session.calls }

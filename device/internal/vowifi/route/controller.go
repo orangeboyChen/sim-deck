@@ -86,6 +86,7 @@ type Controller struct {
 
 	mu          sync.RWMutex
 	active      *session
+	lastSIP     bool
 	snapshot    call.Snapshot
 	events      chan call.Snapshot
 	subscribers []chan call.Snapshot
@@ -215,6 +216,9 @@ func (controller *Controller) Run(ctx context.Context) error {
 			busy := controller.active != nil
 			controller.mu.RUnlock()
 			if !busy {
+				controller.mu.Lock()
+				controller.lastSIP = false
+				controller.mu.Unlock()
 				controller.publish(snapshot)
 			} else if snapshot.State == call.StateRinging || snapshot.State == call.StateWaiting {
 				_ = controller.cellular.Reject(ctx)
@@ -229,6 +233,7 @@ func (controller *Controller) Run(ctx context.Context) error {
 			}
 			item := &session{call: incoming, ready: make(chan struct{})}
 			controller.active = item
+			controller.lastSIP = true
 			controller.mu.Unlock()
 			controller.publish(call.Snapshot{State: call.StateRinging, IncomingNumber: incoming.Number()})
 			go controller.watch(item, incoming)
@@ -249,7 +254,13 @@ func (controller *Controller) setLine(line Line) {
 }
 
 func (controller *Controller) Dial(ctx context.Context, number string) error {
+	if controller.current() != nil {
+		return errors.New("Wi-Fi Calling call is already in progress")
+	}
 	if !controller.enabled() {
+		controller.mu.Lock()
+		controller.lastSIP = false
+		controller.mu.Unlock()
 		return controller.cellular.Dial(ctx, number)
 	}
 	line := controller.currentLine()
@@ -270,6 +281,7 @@ func (controller *Controller) Dial(ctx context.Context, number string) error {
 	dialContext, cancel := context.WithCancel(controller.lifetime)
 	item := &session{cancel: cancel, ready: make(chan struct{})}
 	controller.active = item
+	controller.lastSIP = true
 	controller.mu.Unlock()
 	controller.publish(call.Snapshot{State: call.StateDialing})
 	go func() {
@@ -326,6 +338,9 @@ func (controller *Controller) current() *session {
 func (controller *Controller) Answer(ctx context.Context) error {
 	item := controller.current()
 	if item == nil {
+		if controller.lastWasSIP() {
+			return errors.New("Wi-Fi Calling call has ended")
+		}
 		return controller.cellular.Answer(ctx)
 	}
 	if item.call == nil {
@@ -349,6 +364,9 @@ func (controller *Controller) AnswerWaiting(ctx context.Context) error {
 
 func (controller *Controller) Reject(ctx context.Context) error {
 	if controller.current() == nil {
+		if controller.lastWasSIP() {
+			return nil
+		}
 		return controller.cellular.Reject(ctx)
 	}
 	return controller.endActive(ctx)
@@ -356,9 +374,18 @@ func (controller *Controller) Reject(ctx context.Context) error {
 
 func (controller *Controller) Hangup(ctx context.Context) error {
 	if controller.current() == nil {
+		if controller.lastWasSIP() {
+			return nil
+		}
 		return controller.cellular.Hangup(ctx)
 	}
 	return controller.endActive(ctx)
+}
+
+func (controller *Controller) lastWasSIP() bool {
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	return controller.lastSIP
 }
 
 func (controller *Controller) endActive(ctx context.Context) error {
@@ -446,6 +473,9 @@ func (controller *Controller) SendDTMF(ctx context.Context, digit string) error 
 func (controller *Controller) OpenPCM(ctx context.Context, cellular media.EndpointFactory) (media.DuplexPCM, error) {
 	item := controller.current()
 	if item == nil {
+		if controller.lastWasSIP() {
+			return nil, errors.New("Wi-Fi Calling call has ended")
+		}
 		return cellular(ctx)
 	}
 	return &deferredPCM{session: item, closed: make(chan struct{})}, nil

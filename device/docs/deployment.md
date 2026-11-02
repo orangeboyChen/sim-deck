@@ -10,6 +10,56 @@ The modem containers and the iPhone both connect outbound to `relay-control`.
 The iPhone does not connect to a modem host and does not need a modem IP, USB
 path, device UUID, SIM ICCID, or pairing token.
 
+## Optional Wi-Fi Calling companion
+
+`compose.vowifi.yaml` runs one modem worker and a separate carrier IMS companion
+on the Linux device. The companion builds the GPL-3.0
+[`gsm-sip-bridge`](https://github.com/selvakn/gsm-sip-bridge) source at commit
+`21f074750f7ed641ceb6303e9393384c8cc8f4d1`. It handles ePDG/IKEv2,
+SIM AKA, IMS registration, and carrier SIP. SimDeck registers a local SIP
+account and routes encrypted iPhone calls and PCM audio through that account.
+The two processes must use **different AT character devices on the same
+modem**. Their serial bytes must never share one TTY. The companion disables
+its circuit-switched call and SMS paths; SimDeck retains those paths.
+
+Set the following in a local, untracked environment file: the server URL, the
+SimDeck AT path, a different IMS AT path, the three ALSA nodes, and a random
+local SIP password. The modem and companion share that password through
+Compose environment variables. No carrier, IMSI, MCC/MNC, or destination
+number is configured in SimDeck; the companion reads the active SIM through
+its AT channel.
+
+```sh
+docker compose --env-file /etc/sim-deck/vowifi.env \
+  -f compose.vowifi.yaml build
+docker compose --env-file /etc/sim-deck/vowifi.env \
+  -f compose.vowifi.yaml up -d
+```
+
+The required keys in `vowifi.env` are `SIM_DECK_SERVER_URL`,
+`SIM_DECK_DEVICE_AT_DEVICE`, `SIM_DECK_IMS_AT_DEVICE`,
+`SIM_DECK_AUDIO_CONTROL_DEVICE`, `SIM_DECK_AUDIO_CAPTURE_DEVICE`,
+`SIM_DECK_AUDIO_PLAYBACK_DEVICE`, and `SIM_DECK_VOWIFI_SIP_PASSWORD`. Keep the
+file outside the repository. The companion needs privileged host networking,
+XFRM, and network namespaces; the SimDeck worker still drops all capabilities.
+This configuration is for one modem. A second modem needs its own ports,
+state volumes, SIP account, and IMS companion.
+
+In SIM Card settings, Wi-Fi Calling appears when the local SIP and companion
+status endpoints are configured. “Check Again” reads the companion's ePDG
+tunnel and carrier IMS registration metrics. A registered local SIP account or
+an ePDG DNS result alone does not mark the carrier line ready. With the setting
+on, calls use Wi-Fi only while both carrier metrics are healthy; otherwise
+outgoing calls use the modem's cellular voice path. Switching eSIM profiles
+invalidates the old registration, ends its SIP call, and restarts the IMS
+companion. The new profile can use Wi-Fi only after the old registration goes
+down and the new one registers.
+
+Builds and local SIP tests do not prove carrier provisioning or a successful
+voice call. Real registration and two-way audio require a provisioned SIM or
+eSIM and must be verified on the target modem before declaring VoWiFi support
+for that modem and carrier.
+
 The device container uses the host's normal network route for server HTTPS and
 TURN media. The modem supplies cellular voice and audio; the agent does not
 start a SIM data connection. The Mobile Data slot preference is retained for
