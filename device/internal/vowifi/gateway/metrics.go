@@ -17,8 +17,10 @@ import (
 
 const registeredMetric = "gsm_sip_bridge_vowifi_registered"
 const tunnelMetric = "gsm_sip_bridge_vowifi_tunnel_up"
+const childSAMetric = "gsm_sip_bridge_vowifi_child_sa_up"
+const gmMetric = "gsm_sip_bridge_vowifi_gm_connection_up"
 
-// Metrics reads the companion's carrier IMS and ePDG state. The local SIP
+// Metrics reads the companion's IMS, IPsec, and Gm state. The local SIP
 // registration alone is not evidence that Wi-Fi Calling works.
 type Metrics struct {
 	url       string
@@ -51,8 +53,8 @@ func (metrics *Metrics) Invalidate() {
 	metrics.awaitDown.Store(true)
 }
 
-// Probe updates the cached readiness only after observing both a carrier IMS
-// registration and an ePDG tunnel for the same single companion line.
+// Probe updates readiness only when the carrier IMS registration, ePDG
+// transport, IPsec CHILD_SA, and Gm connection belong to one companion line.
 func (metrics *Metrics) Probe(ctx context.Context) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metrics.url, nil)
 	if err != nil {
@@ -69,7 +71,7 @@ func (metrics *Metrics) Probe(ctx context.Context) (string, error) {
 		metrics.ready.Store(false)
 		return "backend_unavailable", fmt.Errorf("IMS companion metrics returned HTTP %d", response.StatusCode)
 	}
-	values := map[string]map[string]bool{registeredMetric: {}, tunnelMetric: {}}
+	values := map[string]map[string]bool{registeredMetric: {}, tunnelMetric: {}, childSAMetric: {}, gmMetric: {}}
 	scanner := bufio.NewScanner(io.LimitReader(response.Body, 1<<20))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -103,12 +105,26 @@ func (metrics *Metrics) Probe(ctx context.Context) (string, error) {
 	}
 	registered := values[registeredMetric]
 	tunnel := values[tunnelMetric]
-	if len(registered) != 1 || len(tunnel) != 1 {
+	childSA := values[childSAMetric]
+	gm := values[gmMetric]
+	if len(registered) != 1 || len(tunnel) != 1 || len(childSA) != 1 || len(gm) != 1 {
 		metrics.ready.Store(false)
-		return "ims_unregistered", nil
+		return "ims_transport_unavailable", nil
 	}
 	for module, active := range registered {
-		ready := active && tunnel[module]
+		if _, ok := tunnel[module]; !ok {
+			metrics.ready.Store(false)
+			return "ims_transport_unavailable", nil
+		}
+		if _, ok := childSA[module]; !ok {
+			metrics.ready.Store(false)
+			return "ims_transport_unavailable", nil
+		}
+		if _, ok := gm[module]; !ok {
+			metrics.ready.Store(false)
+			return "ims_transport_unavailable", nil
+		}
+		ready := active && tunnel[module] && childSA[module] && gm[module]
 		if !ready {
 			metrics.awaitDown.Store(false)
 		}
@@ -119,6 +135,9 @@ func (metrics *Metrics) Probe(ctx context.Context) (string, error) {
 		metrics.ready.Store(ready)
 		if ready {
 			return "ims_registered", nil
+		}
+		if active {
+			return "ims_transport_unavailable", nil
 		}
 	}
 	return "ims_unregistered", nil

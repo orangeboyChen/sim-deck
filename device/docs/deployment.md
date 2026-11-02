@@ -46,10 +46,11 @@ This configuration is for one modem. A second modem needs its own ports,
 state volumes, SIP account, and IMS companion.
 
 In SIM Card settings, Wi-Fi Calling appears when the local SIP and companion
-status endpoints are configured. “Check Again” reads the companion's ePDG
-tunnel and carrier IMS registration metrics. A registered local SIP account or
-an ePDG DNS result alone does not mark the carrier line ready. With the setting
-on, calls use Wi-Fi only while both carrier metrics are healthy; otherwise
+status endpoints are configured. “Check Again” reads the companion's carrier
+IMS registration, ePDG transport, IPsec CHILD_SA, and Gm connection metrics.
+A registered local SIP account or an ePDG DNS result alone does not mark the
+carrier line ready. With the setting on, calls use Wi-Fi only while all four
+carrier metrics are healthy for one line; otherwise
 outgoing calls use the modem's cellular voice path. Switching eSIM profiles
 invalidates the old registration, ends its SIP call, and restarts the IMS
 companion. The new profile can use Wi-Fi only after the old registration goes

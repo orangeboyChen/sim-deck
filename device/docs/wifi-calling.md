@@ -1,43 +1,48 @@
 # Wi-Fi Calling state and device diagnostics
 
-The device reserves a `wifi_calling_enabled` field for a future IMS backend,
-but rejects enable requests until that backend exists. For an eSIM,
-preferences for Mobile Data, Airplane Mode, incoming calls, incoming SMS, and
-VoLTE, plus the latest Wi-Fi Calling diagnostic, are keyed by the modem's profile ID
-(ICCID). The outer SIM settings operate on the currently enabled eSIM profile.
-Preferences for an inactive profile can be saved without changing the modem;
-the device applies its radio and VoLTE settings when that profile becomes active.
-If the modem later uses a physical SIM, the previous eSIM policy is cleared
-from the active slot; its per-profile preferences remain stored locally.
+The outer SIM settings apply to the active SIM or eSIM profile. Mobile Data,
+Airplane Mode, incoming calls, incoming SMS, VoLTE, and Wi-Fi Calling preferences
+are stored by eSIM profile ID (ICCID). Inactive profile preferences can be edited
+without changing the modem. Switching profiles restores their settings and
+invalidates the old IMS registration and SIP call. Removing a physical SIM
+clears the former eSIM policy from the active slot while retaining per-profile
+preferences locally.
 
-The explicit gateway check performs a device-side diagnostic. The device reads the
-active SIM's IMSI through its serialized AT connection, derives possible 2- and
-3-digit MNC ePDG names, and resolves their standard DNS names over the host's
-network. The IMSI is not persisted or returned to the app. A manual refresh
-repeats the diagnostic.
+Wi-Fi Calling appears as an enabled switch only when the device has the local
+SIP and IMS companion configuration described in
+[`deployment.md`](deployment.md#optional-wi-fi-calling-companion). Enabling it
+stores a preference; it does not claim carrier support. The device routes an
+outgoing call through Wi-Fi only when its local SIP account is registered and
+the companion reports one carrier line with all of these healthy:
 
-`SIM_DECK_VOWIFI_AT_BRIDGE=true` starts a private Unix AT endpoint at
-`<state-directory>/ims-at.sock` (in automatic discovery mode, each modem gets
-its own state directory). A trusted companion IMS process can use this endpoint
-through a serial-to-Unix-socket adapter. Commands are sent through the same
-serialized modem client used by calls, SMS, and eSIM management, so the IMS
-process must not open the modem TTY directly. The socket is mode `0600` and
-must be mounted only into the companion process. The bridge is an AT transport;
-it does not perform ePDG attachment, IMS registration, or voice routing.
+- carrier IMS registration;
+- ePDG transport with a P-CSCF assignment;
+- a usable IPsec CHILD_SA;
+- the IMS Gm signaling connection.
 
-| Status | Meaning |
-| --- | --- |
-| `inactive_profile` | This eSIM profile is not active, so it cannot be probed. |
-| `not_checked` | The profile became active and needs a fresh probe. |
-| `gateway_found` | At least one standard ePDG hostname resolved. |
-| `gateway_not_found` | Neither standard hostname resolved. |
-| `probe_failed` | The IMSI or DNS probe failed. |
+If any condition is missing, outgoing calls use the modem's cellular voice
+path. “Check Again” asks the device to scrape the companion's local metrics.
+`ims_registered` means the four carrier conditions above were observed for the
+same line; it is not proof of a successful call or audio on that carrier.
+`ims_transport_unavailable` means IMS may be registered but its IPsec or Gm
+path is not currently usable. `ims_reconnecting` means a changed eSIM profile
+has not yet shown a fresh registration. `backend_unavailable` means the
+companion could not be queried.
 
-**No status confirms carrier entitlement or IMS registration.** A carrier may
-use a different ePDG name, and DNS resolution alone cannot establish that the
-SIM is authorized. The current device call path still uses modem cellular
-voice. Native calls over the host's Wi-Fi require an ePDG IKEv2/EAP-AKA client,
-IMS SIP registration, protected media, and integration with the existing call
-and WebRTC controllers. Until that path is implemented and tested with a real
-modem and carrier, the app must not label the preference as an active VoWiFi
-connection or route calls through it.
+Without an IMS companion, “Check Again” performs a limited diagnostic. The
+device reads the active SIM's IMSI over its serialized AT connection, derives
+standard ePDG names for both possible MNC lengths, and resolves them using
+the host network. The IMSI is neither persisted nor returned to the app.
+`gateway_found` means a standard hostname resolved. `gateway_not_found` means
+neither resolved; carriers can use other names. Neither result establishes
+entitlement or IMS registration, and the device does not route calls over
+Wi-Fi in this mode.
+
+`SIM_DECK_VOWIFI_AT_BRIDGE=true` can also expose a private Unix AT socket at
+`<state-directory>/ims-at.sock` to a trusted companion. This is a transport
+for serialized modem commands, not an IMS implementation. The provided
+Compose deployment uses two independent AT ports on one modem instead.
+
+The local SIP, metrics, and Compose checks require no provisioned SIM. Real
+carrier registration, inbound and outbound calls, and two-way audio still
+require a provisioned SIM or eSIM on the target modem.

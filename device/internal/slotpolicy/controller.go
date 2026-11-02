@@ -287,8 +287,8 @@ func (controller *Controller) configure(ctx context.Context, profileID string, u
 	return next, nil
 }
 
-// ProbeWiFiCalling refreshes gateway discovery for the active SIM only.
-// A gateway DNS result is not carrier entitlement or IMS registration.
+// ProbeWiFiCalling refreshes the device-side IMS status for the active SIM.
+// Without an IMS companion, the result is only an ePDG DNS diagnostic.
 func (controller *Controller) ProbeWiFiCalling(ctx context.Context, profileID string) (Settings, error) {
 	controller.mu.Lock()
 	defer controller.mu.Unlock()

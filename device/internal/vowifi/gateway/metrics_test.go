@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestMetricsRequiresCarrierRegistrationAndTunnel(t *testing.T) {
+func TestMetricsRequiresCarrierRegistrationAndHealthyTransport(t *testing.T) {
 	body := ""
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/metrics" {
@@ -21,15 +21,23 @@ func TestMetricsRequiresCarrierRegistrationAndTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	line := func(registered, tunnel, childSA, gm int) string {
+		return fmt.Sprintf("%s{module=\"vowifi-0\"} %d\n%s{module=\"vowifi-0\"} %d\n%s{module=\"vowifi-0\"} %d\n%s{module=\"vowifi-0\"} %d\n",
+			registeredMetric, registered, tunnelMetric, tunnel, childSAMetric, childSA, gmMetric, gm)
+	}
 	for _, test := range []struct {
 		body   string
 		status string
 		ready  bool
 	}{
-		{registeredMetric + "{module=\"vowifi-0\"} 1\n" + tunnelMetric + "{module=\"vowifi-0\"} 1\n", "ims_registered", true},
-		{registeredMetric + "{module=\"vowifi-0\"} 1\n" + tunnelMetric + "{module=\"vowifi-0\"} 0\n", "ims_unregistered", false},
-		{registeredMetric + "{module=\"vowifi-0\"} 1\n" + tunnelMetric + "{module=\"vowifi-1\"} 1\n", "ims_unregistered", false},
-		{registeredMetric + "{module=\"vowifi-0\"} 1\n" + registeredMetric + "{module=\"vowifi-1\"} 1\n" + tunnelMetric + "{module=\"vowifi-0\"} 1\n", "ims_unregistered", false},
+		{line(1, 1, 1, 1), "ims_registered", true},
+		{line(0, 1, 1, 1), "ims_unregistered", false},
+		{line(1, 0, 1, 1), "ims_transport_unavailable", false},
+		{line(1, 1, 0, 1), "ims_transport_unavailable", false},
+		{line(1, 1, 1, 0), "ims_transport_unavailable", false},
+		{registeredMetric + "{module=\"vowifi-0\"} 1\n" + tunnelMetric + "{module=\"vowifi-0\"} 1\n", "ims_transport_unavailable", false},
+		{line(1, 1, 1, 1) + childSAMetric + "{module=\"vowifi-1\"} 1\n", "ims_transport_unavailable", false},
+		{registeredMetric + "{module=\"vowifi-0\"} 1\n" + tunnelMetric + "{module=\"vowifi-1\"} 1\n" + childSAMetric + "{module=\"vowifi-0\"} 1\n" + gmMetric + "{module=\"vowifi-0\"} 1\n", "ims_transport_unavailable", false},
 	} {
 		body = test.body
 		status, err := metrics.Probe(context.Background())
@@ -37,15 +45,15 @@ func TestMetricsRequiresCarrierRegistrationAndTunnel(t *testing.T) {
 			t.Fatalf("status=%q ready=%v error=%v for %q", status, metrics.Ready(), err, test.body)
 		}
 	}
-	body = registeredMetric + "{module=\"vowifi-0\"} 1\n" + tunnelMetric + "{module=\"vowifi-0\"} 1\n"
+	body = line(1, 1, 1, 1)
 	metrics.Invalidate()
 	status, err := metrics.Probe(context.Background())
 	if err != nil || status != "ims_reconnecting" || metrics.Ready() {
 		t.Fatalf("old profile registration reused: status=%q ready=%v err=%v", status, metrics.Ready(), err)
 	}
-	body = registeredMetric + "{module=\"vowifi-0\"} 0\n" + tunnelMetric + "{module=\"vowifi-0\"} 0\n"
+	body = line(0, 0, 0, 0)
 	_, _ = metrics.Probe(context.Background())
-	body = registeredMetric + "{module=\"vowifi-0\"} 1\n" + tunnelMetric + "{module=\"vowifi-0\"} 1\n"
+	body = line(1, 1, 1, 1)
 	status, err = metrics.Probe(context.Background())
 	if err != nil || status != "ims_registered" || !metrics.Ready() {
 		t.Fatalf("fresh profile registration rejected: status=%q ready=%v err=%v", status, metrics.Ready(), err)

@@ -243,6 +243,7 @@ struct WiFiCallingSection: View {
         switch settings.wifiCallingStatus {
         case "ims_registered": return String(localized: "Registered over Wi-Fi")
         case "ims_unregistered": return String(localized: "Not registered")
+        case "ims_transport_unavailable": return String(localized: "IMS transport unavailable")
         case "ims_reconnecting": return String(localized: "Registering new SIM plan")
         case "backend_unavailable": return String(localized: "IMS gateway unavailable")
         case "inactive_profile": return String(localized: "Activate this plan to check")
