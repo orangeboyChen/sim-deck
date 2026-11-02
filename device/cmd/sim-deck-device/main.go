@@ -600,6 +600,8 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 				}
 			}
 		}
+	} else if err := policy.SelectProfile(ctx, ""); err != nil {
+		return fmt.Errorf("restore physical SIM slot policy: %w", err)
 	}
 	if err := policy.Restore(ctx); err != nil {
 		return fmt.Errorf("restore slot policy: %w", err)

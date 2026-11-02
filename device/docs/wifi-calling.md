@@ -6,6 +6,8 @@ incoming SMS, VoLTE, and Wi-Fi Calling are keyed by the modem's profile ID
 (ICCID). The outer SIM settings operate on the currently enabled eSIM profile.
 Preferences for an inactive profile can be saved without changing the modem;
 the device applies its radio and VoLTE settings when that profile becomes active.
+If the modem later uses a physical SIM, the previous eSIM policy is cleared
+from the active slot; its per-profile preferences remain stored locally.
 
 Turning on Wi-Fi Calling performs a device-side diagnostic. The device reads the
 active SIM's IMSI through its serialized AT connection, derives possible 2- and

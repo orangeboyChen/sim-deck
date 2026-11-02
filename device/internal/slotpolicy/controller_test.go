@@ -132,6 +132,23 @@ var _ = Describe("Slot policy controller", func() {
 		Expect(commander.commands).To(Equal([]string{`AT+QCFG="ims",1`, `AT+QCFG="ims",0`}))
 	})
 
+	It("does not apply a former eSIM profile to a physical SIM after restart", func() {
+		controller, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		profileID := "89000000000000000001"
+		Expect(controller.SelectProfile(context.Background(), profileID)).To(Succeed())
+		enabled := true
+		_, err = controller.ConfigureProfile(context.Background(), profileID, Update{VoLTEEnabled: &enabled})
+		Expect(err).NotTo(HaveOccurred())
+
+		reloaded, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reloaded.SelectProfile(context.Background(), "")).To(Succeed())
+		Expect(reloaded.Current()).To(Equal(defaultSettings()))
+		Expect(reloaded.Profile(profileID).VoLTEEnabled).To(BeTrue())
+		Expect(commander.commands).To(Equal([]string{`AT+QCFG="ims",1`, `AT+QCFG="ims",0`}))
+	})
+
 	It("reports gateway discovery without claiming VoWiFi registration", func() {
 		controller, err := NewController(directory, commander, time.Second)
 		Expect(err).NotTo(HaveOccurred())
