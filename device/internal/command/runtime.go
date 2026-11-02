@@ -411,23 +411,23 @@ func (runtime *Runtime) validateAndSelectProfile(ctx context.Context, profileID 
 	return runtime.selectEnabledProfile(ctx, profiles)
 }
 
-func (runtime *Runtime) selectCurrentProfile(ctx context.Context) error {
+func (runtime *Runtime) selectCurrentProfile(ctx context.Context) (string, error) {
 	if runtime.esimProfiles == nil {
-		return errESIMUnavailable
+		return "", errESIMUnavailable
 	}
 	profiles, err := runtime.esimProfiles.ListESIMProfiles(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := runtime.selectEnabledProfile(ctx, profiles); err != nil {
-		return err
+		return "", err
 	}
 	for _, profile := range profiles {
 		if profile.Enabled {
-			return nil
+			return profile.ProfileID, nil
 		}
 	}
-	return errESIMUnavailable
+	return "", errESIMUnavailable
 }
 
 func (runtime *Runtime) execute(ctx context.Context, payload Payload, senderInstallationID string) (executionResult, error) {
@@ -520,7 +520,7 @@ func (runtime *Runtime) execute(ctx context.Context, payload Payload, senderInst
 			settings, err = runtime.slotSettings.ConfigureProfile(ctx, payload.ESIMProfileID, update)
 		} else {
 			if runtime.esimSupported {
-				if err = runtime.selectCurrentProfile(ctx); err != nil {
+				if _, err = runtime.selectCurrentProfile(ctx); err != nil {
 					return executionResult{}, err
 				}
 			}
@@ -531,17 +531,20 @@ func (runtime *Runtime) execute(ctx context.Context, payload Payload, senderInst
 		}
 		return executionResult{slotSettings: &settings}, nil
 	case "slot.probe_vowifi":
+		profileID := payload.ESIMProfileID
 		if payload.ESIMProfileID != "" {
 			if err := runtime.validateAndSelectProfile(ctx, payload.ESIMProfileID); err != nil {
 				return executionResult{}, err
 			}
 		}
 		if payload.ESIMProfileID == "" && runtime.esimSupported {
-			if err := runtime.selectCurrentProfile(ctx); err != nil {
+			var err error
+			profileID, err = runtime.selectCurrentProfile(ctx)
+			if err != nil {
 				return executionResult{}, err
 			}
 		}
-		settings, err := runtime.slotSettings.ProbeWiFiCalling(ctx, payload.ESIMProfileID)
+		settings, err := runtime.slotSettings.ProbeWiFiCalling(ctx, profileID)
 		if err != nil {
 			return executionResult{}, err
 		}

@@ -457,9 +457,19 @@ var _ = Describe("Encrypted command runtime", func() {
 		Expect(settings.profileID).To(Equal(profileID))
 		Expect(settings.update.WiFiCallingEnabled).NotTo(BeNil())
 
+		_, err = runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.probe_vowifi", SlotID: state.SlotID, SIMID: state.SIMID,
+		}, testInstallationID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.profileID).To(Equal(profileID))
+
 		runtime.esimProfiles = &fakeESIMProfiles{}
 		_, err = runtime.execute(context.Background(), Payload{
 			Version: 1, Operation: "slot.configure", SlotID: state.SlotID, SIMID: state.SIMID,
+		}, testInstallationID)
+		Expect(err).To(MatchError(errESIMUnavailable))
+		_, err = runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.probe_vowifi", SlotID: state.SlotID, SIMID: state.SIMID,
 		}, testInstallationID)
 		Expect(err).To(MatchError(errESIMUnavailable))
 	})
