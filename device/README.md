@@ -305,10 +305,9 @@ file. Do not add multiple modem mappings to one container.
 
 The local readiness endpoints in the example are
 `http://127.0.0.1:18081/healthz` and `http://127.0.0.1:18082/healthz`. Readiness
-becomes healthy only after the AT port is initialized and server binding has
-succeeded. The image declares the same probe as its Docker health check, so a
-container stays `starting` or becomes `unhealthy` instead of appearing ready
-while its modem or server binding is unavailable.
+becomes healthy after the AT port and local modem audio are initialized. It does
+not depend on SIM presence, cellular registration, or owner approval, so an
+empty SIM slot remains healthy while the device waits for setup.
 
 Plain HTTP is rejected by default. It can be enabled only for an isolated local
 development network or encrypted VPN with

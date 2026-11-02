@@ -46,8 +46,9 @@ docker compose -f compose.node.yaml logs -f node
 
 The first log entry contains a tree like `node → modem-1 → AT/audio nodes` for
 every discovered modem. Each worker then logs its derived device identity and
-waits for owner approval independently. The health endpoint is ready only after
-all discovered workers are ready.
+waits for owner approval independently. The health endpoint is ready after all
+discovered modems initialize their local AT and audio paths; SIM presence,
+cellular registration, and owner approval do not affect health.
 
 If a modem is added or removed, recreate the node container so the startup
 topology is rescanned:
@@ -274,7 +275,7 @@ Linux host maps the modem's serial and ALSA devices directly.
 | `No Quectel modem ... stable USB serial` | `udevadm info --query=property --name=/dev/ttyUSB*`; confirm `ID_SERIAL_SHORT` exists and the modem is not hidden behind a USB hub that drops serial data. |
 | Missing UAC nodes | `cat /proc/asound/cards`, `aplay -l`, `arecord -l`; enable UAC in the modem USB composition and reboot it. |
 | Candidate does not appear | Discovery is enabled in the app, the server URL is reachable, and logs do not show TLS, DNS, or `device_discovery_closed`. |
-| Container remains `starting` | Inspect `docker compose logs modem-N`; approval, AT readiness, SIM synchronization, or TURN configuration may still be pending. |
+| Container remains `starting` | Inspect `docker compose logs modem-N`; AT initialization or audio configuration may still be pending. |
 | Wrong modem assigned to a service | Stop the stack, rerun the installer, and verify the generated stable links. Never swap only `ttyUSB` numbers by hand. |
 | Calls connect without audio | Confirm both UAC playback/capture nodes are mapped to the same modem service and that the server TURN port and relay range are open. |
 | HTTP server URL rejected | Use HTTPS, or explicitly set `SIM_DECK_ALLOW_INSECURE_HTTP=true` only on a trusted development network. |

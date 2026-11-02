@@ -641,6 +641,8 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	if err := dependencies.configureAudio(ctx, config, client); err != nil {
 		return fmt.Errorf("configure modem audio: %w", err)
 	}
+	ready.Store(true)
+	defer ready.Store(false)
 	for {
 		deviceIdentity, err = dependencies.bindIdentity(ctx, config, identityStore, deviceIdentity)
 		if err != nil {
@@ -740,8 +742,6 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 		provider.SetSlotSettingsProvider(policy.Current)
 	}
 
-	ready.Store(true)
-	defer ready.Store(false)
 	logger.Info(
 		"device agent ready",
 		"at_device", config.ATDevice,

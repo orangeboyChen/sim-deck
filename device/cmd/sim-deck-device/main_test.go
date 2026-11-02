@@ -471,7 +471,7 @@ var _ = Describe("Device command runtime", func() {
 		Eventually(result).Should(Receive(BeNil()))
 	})
 
-	It("sets readiness only for the initialized and bound session lifetime", func() {
+	It("sets readiness after local modem initialization", func() {
 		transport := newBlockingTransport()
 		session := &fakeDeviceSession{runStarted: make(chan struct{})}
 		config := testConfig(GinkgoT().TempDir())
@@ -485,6 +485,33 @@ var _ = Describe("Device command runtime", func() {
 		}()
 
 		Eventually(session.runStarted).Should(BeClosed())
+		Expect(ready.Load()).To(BeTrue())
+		cancel()
+		Eventually(result).Should(Receive(MatchError(context.Canceled)))
+		Expect(ready.Load()).To(BeFalse())
+	})
+
+	It("stays ready without a SIM while waiting for owner approval", func() {
+		transport := newBlockingTransport()
+		session := &fakeDeviceSession{}
+		dependencies := testDependencies(transport, session)
+		bindingStarted := make(chan struct{})
+		dependencies.bindIdentity = func(ctx context.Context, _ agent.Config, _ identity.Store, _ identity.State) (identity.State, error) {
+			close(bindingStarted)
+			<-ctx.Done()
+			return identity.State{}, ctx.Err()
+		}
+		ready := &atomic.Bool{}
+		config := testConfig(GinkgoT().TempDir())
+		config.CommandTimeout = 10 * time.Millisecond
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+
+		go func() {
+			result <- runDevice(ctx, config, logger, ready, dependencies)
+		}()
+
+		Eventually(bindingStarted).Should(BeClosed())
 		Expect(ready.Load()).To(BeTrue())
 		cancel()
 		Eventually(result).Should(Receive(MatchError(context.Canceled)))
