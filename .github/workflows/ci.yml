@@ -111,6 +111,9 @@ jobs:
         env:
           GOWORK: "off"
         run: go vet ./...
+      - name: Check VoWiFi AT port ownership
+        working-directory: device
+        run: bash vowifi/entrypoint_test.sh
       - name: Check coverage
         working-directory: device
         env:
