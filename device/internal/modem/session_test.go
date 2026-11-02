@@ -433,7 +433,7 @@ var _ = Describe("Modem session", func() {
 					_, _ = modemTransport.Write([]byte("+CPIN: READY\r\nOK\r\n"))
 				case operatorSelectionQuery + "\r":
 					_, _ = modemTransport.Write([]byte("+COPS: 0,0,\"CHINA MOBILE\",7\r\nOK\r\n"))
-				case "AT+CCWA=1,1\r":
+			case "AT+CCWA=1\r":
 					_, _ = modemTransport.Write([]byte("+CME ERROR: no network service\r\n"))
 				case "AT+CMGL=4\r":
 					_, _ = modemTransport.Write([]byte("+CMGL: 1,0,,23\r\n" + testDeliverPDU + "\r\n+CMGL: 2,0,,1\r\nnot-hex\r\nOK\r\n"))
@@ -458,6 +458,8 @@ var _ = Describe("Modem session", func() {
 		Expect(initializationCommands).To(ContainElement(`AT+CPMS="MT","MT","MT"`))
 		Expect(initializationCommands).To(ContainElement("AT+CNMI=2,1,0,1,0"))
 		Expect(initializationCommands).NotTo(ContainElement("AT+CNMI=2,2,0,1,0"))
+		Expect(initializationCommands).To(ContainElement("AT+CCWA=1"))
+		Expect(initializationCommands).NotTo(ContainElement("AT+CCWA=1,1"))
 	})
 
 	It("restores automatic operator selection when the modem is deregistered", func() {

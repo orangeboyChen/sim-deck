@@ -30,7 +30,8 @@ var initializationCommands = []string{
 	`AT+CPMS="MT","MT","MT"`,
 	"AT+CNMI=2,1,0,1,0",
 	"AT+CLIP=1",
-	"AT+CCWA=1,1",
+	// Omitting the mode enables call-waiting URCs without interrogating the network.
+	"AT+CCWA=1",
 }
 
 const simReadinessCommand = "AT+CPIN?"
@@ -1153,7 +1154,7 @@ func (session *Session) Initialize(ctx context.Context) error {
 
 	var response at.Response
 	for _, command := range initializationCommands {
-		if !simInserted && (command == `AT+CPMS="MT","MT","MT"` || command == "AT+CNMI=2,1,0,1,0" || command == "AT+CCWA=1,1") {
+		if !simInserted && (command == `AT+CPMS="MT","MT","MT"` || command == "AT+CNMI=2,1,0,1,0" || command == "AT+CCWA=1") {
 			continue
 		}
 		commandTimeout := session.timeout
@@ -1165,7 +1166,7 @@ func (session *Session) Initialize(ctx context.Context) error {
 			return fmt.Errorf("initialize modem with %s: %w", command, err)
 		}
 		if !response.OK() {
-			if isNoNetworkService(response.Terminal) || (command != "AT+CCWA=1,1" && isSIMNotInserted(response.Terminal)) {
+			if isNoNetworkService(response.Terminal) || isSIMNotInserted(response.Terminal) {
 				session.logger.Warn("SIM or network dependent modem initialization deferred", "command", command, "error", response.Terminal)
 				continue
 			}
