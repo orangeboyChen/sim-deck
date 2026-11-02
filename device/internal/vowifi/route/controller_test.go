@@ -192,10 +192,15 @@ func TestCellularFallbackAndUnavailableGateway(t *testing.T) {
 	if len(commands) != 1 || commands[0] != "ATD1234;" {
 		t.Fatalf("cellular dial commands: %v", commands)
 	}
-	wifi, line, _, _ := setupRoute(t, true)
+	wifi, line, fallbackCommander, _ := setupRoute(t, true)
 	line.registered = false
-	if err := wifi.Dial(context.Background(), "1234"); err == nil {
-		t.Fatal("dialed through an unregistered gateway")
+	if err := wifi.Dial(context.Background(), "1234"); err != nil {
+		t.Fatalf("cellular fallback failed: %v", err)
+	}
+	fallbackCommander.mu.Lock()
+	defer fallbackCommander.mu.Unlock()
+	if len(fallbackCommander.commands) != 1 || fallbackCommander.commands[0] != "ATD1234;" {
+		t.Fatalf("unregistered gateway did not fall back to cellular: %v", fallbackCommander.commands)
 	}
 }
 

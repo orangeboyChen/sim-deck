@@ -258,14 +258,11 @@ func (controller *Controller) Dial(ctx context.Context, number string) error {
 		return errors.New("Wi-Fi Calling call is already in progress")
 	}
 	if !controller.enabled() {
-		controller.mu.Lock()
-		controller.lastSIP = false
-		controller.mu.Unlock()
-		return controller.cellular.Dial(ctx, number)
+		return controller.dialCellular(ctx, number)
 	}
 	line := controller.currentLine()
 	if line == nil || !line.Registered() {
-		return errors.New("Wi-Fi Calling gateway is not registered")
+		return controller.dialCellular(ctx, number)
 	}
 	if controller.cellular.State() != call.StateIdle && controller.cellular.State() != call.StateEnded {
 		return errors.New("cellular call is already in progress")
@@ -307,6 +304,13 @@ func (controller *Controller) Dial(ctx context.Context, number string) error {
 		controller.watch(item, dialog)
 	}()
 	return nil
+}
+
+func (controller *Controller) dialCellular(ctx context.Context, number string) error {
+	controller.mu.Lock()
+	controller.lastSIP = false
+	controller.mu.Unlock()
+	return controller.cellular.Dial(ctx, number)
 }
 
 func (controller *Controller) watch(item *session, dialog SIPCall) {
