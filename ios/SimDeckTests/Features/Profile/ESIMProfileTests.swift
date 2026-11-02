@@ -117,7 +117,7 @@ private final class FakeESIMDeviceTransport: ESIMDeviceProfileTransport {
 }
 
 @MainActor
-private final class ESIMMetadataStoreFake: ESIMProfileMetadataStore {
+final class ESIMMetadataStoreFake: ESIMProfileMetadataStore {
     var listCalls = 0
     var listError: Error?
 

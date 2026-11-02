@@ -3615,8 +3615,65 @@
         }
       }
     },
-    "The eSIM device is offline." : {
-
+    "The device rejected the eSIM operation (%@)." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备拒绝了 eSIM 操作（%@）。"
+          }
+        }
+      }
+    },
+    "The eSIM command could not be encrypted. Refresh the device and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加密 eSIM 指令。请刷新设备后重试。"
+          }
+        }
+      }
+    },
+    "The eSIM device did not respond in time. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待 eSIM 设备响应超时，请重试。"
+          }
+        }
+      }
+    },
+    "The eSIM device returned a response that could not be read." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 eSIM 设备返回的响应。"
+          }
+        }
+      }
+    },
+    "The eSIM operation is unavailable." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前无法执行 eSIM 操作。"
+          }
+        }
+      }
+    },
+    "This app's device authorization is unavailable. Reopen the app and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 App 的设备授权不可用，请重新打开 App 后重试。"
+          }
+        }
+      }
     },
     "The modem credential will stop working immediately. This action cannot be undone." : {
       "localizations" : {

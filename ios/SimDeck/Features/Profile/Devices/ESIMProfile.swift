@@ -4,6 +4,7 @@
 
 import Foundation
 import CryptoKit
+import OSLog
 import RelayProtocol
 
 struct ESIMProfile: Identifiable, Codable, Equatable, Sendable {
@@ -63,11 +64,34 @@ struct DeviceESIMProfile: Codable, Equatable, Sendable {
         case nickname
         case provider
     }
+
+    init(profileID: String, iccid: String, enabled: Bool, nickname: String, provider: String) {
+        self.profileID = profileID
+        self.iccid = iccid
+        self.enabled = enabled
+        self.nickname = nickname
+        self.provider = provider
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        profileID = try values.decode(String.self, forKey: .profileID)
+        iccid = try values.decode(String.self, forKey: .iccid)
+        enabled = try values.decode(Bool.self, forKey: .enabled)
+        // The device omits empty display metadata from the encrypted JSON.
+        nickname = try values.decodeIfPresent(String.self, forKey: .nickname) ?? ""
+        provider = try values.decodeIfPresent(String.self, forKey: .provider) ?? ""
+    }
 }
 
 enum ESIMProfileManagerError: LocalizedError, Equatable {
     case unsupported
     case unavailable
+    case identityUnavailable
+    case encryptionFailed
+    case invalidResponse
+    case timedOut
+    case commandRejected(String)
     case invalidActivationCode
     case duplicateProfile
 
@@ -76,7 +100,17 @@ enum ESIMProfileManagerError: LocalizedError, Equatable {
         case .unsupported:
             String(localized: "This modem does not expose eSIM profile management.")
         case .unavailable:
-            String(localized: "The eSIM device is offline.")
+            String(localized: "The eSIM operation is unavailable.")
+        case .identityUnavailable:
+            String(localized: "This app's device authorization is unavailable. Reopen the app and try again.")
+        case .encryptionFailed:
+            String(localized: "The eSIM command could not be encrypted. Refresh the device and try again.")
+        case .invalidResponse:
+            String(localized: "The eSIM device returned a response that could not be read.")
+        case .timedOut:
+            String(localized: "The eSIM device did not respond in time. Try again.")
+        case .commandRejected(let code):
+            String(localized: "The device rejected the eSIM operation (\(code)).")
         case .invalidActivationCode:
             String(localized: "Enter a valid eSIM activation code.")
         case .duplicateProfile:
@@ -122,6 +156,7 @@ protocol ESIMDeviceProfileTransport: AnyObject {
 
 @MainActor
 final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
+    private static let logger = Logger(subsystem: "com.nowcent.simdeck", category: "ESIMDeviceProfileTransport")
     private let api: any EncryptedCallCommandAPI
     private let commandSigner: InstallationCommandSigner
     private let now: () -> Date
@@ -147,9 +182,6 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
 
     func list(line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] {
         let result = try await execute(operation: "esim.list", profileID: nil, name: nil, line: line)
-        guard result.success else {
-            throw ESIMProfileManagerError.unavailable
-        }
         return result.esimProfiles ?? []
     }
 
@@ -161,9 +193,6 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
             activationCode: code.trimmingCharacters(in: .whitespacesAndNewlines),
             line: line
         )
-        guard result.success else {
-            throw ESIMProfileManagerError.unavailable
-        }
         return result.esimProfiles ?? []
     }
 
@@ -187,11 +216,11 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
         line: DeviceLineIdentity
     ) async throws -> CallCommandResult {
         guard commandSigner.identity != nil else {
-            throw ESIMProfileManagerError.unavailable
+            throw ESIMProfileManagerError.identityUnavailable
         }
         let target = try await api.commandTarget(for: line)
         guard let installationIdentity = commandSigner.identity else {
-            throw ESIMProfileManagerError.unavailable
+            throw ESIMProfileManagerError.identityUnavailable
         }
         let commandID = makeCommandID()
         let payload = ESIMCommandPayload(
@@ -216,13 +245,13 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
                 installationIdentity: installationIdentity
             )
         } catch {
-            throw ESIMProfileManagerError.unavailable
+            throw ESIMProfileManagerError.encryptionFailed
         }
         try await api.enqueueCommand(deviceID: target.deviceID, command: sealed.request)
         for attempt in 0..<60 {
             let status = try await api.commandStatus(deviceID: target.deviceID, commandID: commandID)
             if status.state == "completed" {
-                guard let encryptedResult = status.result else { throw ESIMProfileManagerError.unavailable }
+                guard let encryptedResult = status.result else { throw ESIMProfileManagerError.invalidResponse }
                 let result: CallCommandResult
                 do {
                     result = try EncryptedCallCommandCodec.openResult(
@@ -232,17 +261,18 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
                         deviceID: target.deviceID
                     )
                 } catch {
-                    throw ESIMProfileManagerError.unavailable
+                    Self.logger.error("Unable to read eSIM response; command_id=\(commandID.uuidString, privacy: .public) operation=\(operation, privacy: .public) error_type=\(String(describing: type(of: error)), privacy: .public)")
+                    throw ESIMProfileManagerError.invalidResponse
                 }
                 guard result.success else {
                     if result.errorCode == "esim_unavailable" { throw ESIMProfileManagerError.unsupported }
-                    throw ESIMProfileManagerError.unavailable
+                    throw ESIMProfileManagerError.commandRejected(result.errorCode ?? "unknown")
                 }
                 return result
             }
             if attempt < 59 { try await waitBeforePollingAgain() }
         }
-        throw ESIMProfileManagerError.unavailable
+        throw ESIMProfileManagerError.timedOut
     }
 }
 
@@ -365,7 +395,7 @@ final class LiveESIMProfileManager: ESIMProfileManaging {
         let installed = after.first { candidate in
             !before.contains { $0.profileID == candidate.profileID }
         } ?? after.last
-        guard let installed else { throw ESIMProfileManagerError.unavailable }
+        guard let installed else { throw ESIMProfileManagerError.invalidResponse }
         let metadata = try await metadataStore.addESIMProfile(
             simID: simID,
             profileID: installed.profileID,

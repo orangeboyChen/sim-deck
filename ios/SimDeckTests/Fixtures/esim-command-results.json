@@ -1,0 +1,68 @@
+{
+  "deviceID": "01900000-0000-7000-8000-000000000401",
+  "commandID": "01900000-0000-7000-8000-000000000404",
+  "devicePublicKey": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk=",
+  "senderPrivateKey": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+  "results": [
+    {
+      "name": "empty",
+      "plaintext": "{\"version\":1,\"success\":true,\"call_state\":\"idle\",\"esim_profiles\":[]}",
+      "nonce": "CQkJCQkJCQkJCQkJ",
+      "ciphertext": "lQCipgl4OgwM8cjPXHtfWwJGUl1bWj6ayyGi90O3ba6rkV/LBCxx3OsPsJgoX1EU33XQj+jPr+5ZAVB/8a2xdWDtPJoKJJg7pzrjuus4Jfs+gRQ="
+    },
+    {
+      "name": "null",
+      "plaintext": "{\"version\":1,\"success\":true,\"call_state\":\"idle\",\"esim_profiles\":null}",
+      "nonce": "CQkJCQkJCQkJCQkJ",
+      "ciphertext": "lQCipgl4OgwM8cjPXHtfWwJGUl1bWj6ayyGi90O3ba6rkV/LBCxx3OsPsJgoX1EU33XQj+jPr+5ZAVB/8a2xdVXFLUR+YR1vtCRn5a2omwaAEUSeuw=="
+    },
+    {
+      "name": "omitted",
+      "plaintext": "{\"version\":1,\"success\":true,\"call_state\":\"idle\"}",
+      "nonce": "CQkJCQkJCQkJCQkJ",
+      "ciphertext": "lQCipgl4OgwM8cjPXHtfWwJGUl1bWj6ayyGi90O3ba6rkV/LBCxx3OsPsJgoX1FFijOUD2LA5wfz0E6UTDen4Q=="
+    },
+    {
+      "name": "without_metadata",
+      "plaintext": "{\"version\":1,\"success\":true,\"call_state\":\"idle\",\"esim_profiles\":[{\"profile_id\":\"89000000000000000001\",\"iccid\":\"89000000000000000001\",\"enabled\":false}]}",
+      "nonce": "CQkJCQkJCQkJCQkJ",
+      "ciphertext": "lQCipgl4OgwM8cjPXHtfWwJGUl1bWj6ayyGi90O3ba6rkV/LBCxx3OsPsJgoX1EU33XQj+jPr+5ZAVB/8a2xdWDLY1hxaEohVWgOHTQZRj7MlkQkrTUDRPd0hGxpE5VYeh1I05KK8gao+p+g//38myKt3nwdKx1FXmJExKo5Pu6OI0Q5u/ov60Kja86PXH0LdxPZw7UdwMG8grQwwJwbEDlnxzJUpqE="
+    },
+    {
+      "name": "nickname_only",
+      "plaintext": "{\"version\":1,\"success\":true,\"call_state\":\"idle\",\"esim_profiles\":[{\"profile_id\":\"89000000000000000001\",\"iccid\":\"89000000000000000001\",\"enabled\":false,\"nickname\":\"Travel\"}]}",
+      "nonce": "CQkJCQkJCQkJCQkJ",
+      "ciphertext": "lQCipgl4OgwM8cjPXHtfWwJGUl1bWj6ayyGi90O3ba6rkV/LBCxx3OsPsJgoX1EU33XQj+jPr+5ZAVB/8a2xdWDLY1hxaEohVWgOHTQZRj7MlkQkrTUDRPd0hGxpE5VYeh1I05KK8gao+p+g//38myKt3nwdKx1FXmJExKo5Pu6OI0Q5u/ov60Kja86PXH0LdxPZw+Ri00RljHL6naU8H8EYD+FTXOIoghO2AzA82mK8Le1x4rUWlYeX3Q=="
+    },
+    {
+      "name": "provider_only",
+      "plaintext": "{\"version\":1,\"success\":true,\"call_state\":\"idle\",\"esim_profiles\":[{\"profile_id\":\"89000000000000000001\",\"iccid\":\"89000000000000000001\",\"enabled\":false,\"provider\":\"Example Mobile\"}]}",
+      "nonce": "CQkJCQkJCQkJCQkJ",
+      "ciphertext": "lQCipgl4OgwM8cjPXHtfWwJGUl1bWj6ayyGi90O3ba6rkV/LBCxx3OsPsJgoX1EU33XQj+jPr+5ZAVB/8a2xdWDLY1hxaEohVWgOHTQZRj7MlkQkrTUDRPd0hGxpE5VYeh1I05KK8gao+p+g//38myKt3nwdKx1FXmJExKo5Pu6OI0Q5u/ov60Kja86PXH0LdxPZw+RizV9pkXX/lbI8H8EJBeFISeJv3wOkxxjHEBl//pEHGtelTQ8w5XJ4N9zhmJDE"
+    },
+    {
+      "name": "full_metadata",
+      "plaintext": "{\"version\":1,\"success\":true,\"call_state\":\"idle\",\"esim_profiles\":[{\"profile_id\":\"89000000000000000001\",\"iccid\":\"89000000000000000001\",\"enabled\":false,\"nickname\":\"Travel\",\"provider\":\"Example Mobile\"}]}",
+      "nonce": "CQkJCQkJCQkJCQkJ",
+      "ciphertext": "lQCipgl4OgwM8cjPXHtfWwJGUl1bWj6ayyGi90O3ba6rkV/LBCxx3OsPsJgoX1EU33XQj+jPr+5ZAVB/8a2xdWDLY1hxaEohVWgOHTQZRj7MlkQkrTUDRPd0hGxpE5VYeh1I05KK8gao+p+g//38myKt3nwdKx1FXmJExKo5Pu6OI0Q5u/ov60Kja86PXH0LdxPZw+Ri00RljHL6naU8H8EYD+FTXOIo02y71x7dHF9n0c5um/kisbisWU1WVHCNgQJi7hK5zSRi67wne8lYypmXOdiQz9Y="
+    },
+    {
+      "name": "esim_unavailable",
+      "plaintext": "{\"version\":1,\"success\":false,\"error_code\":\"esim_unavailable\",\"call_state\":\"idle\"}",
+      "nonce": "CQkJCQkJCQkJCQkJ",
+      "ciphertext": "lQCipgl4OgwM8cjPXHtfWwJGUl1bWj6I2Di0vk32abC1oV7gBjdwm/MX+5k3Ux5niH7CkOT5s/1UC1wxuPzwLlfcHlt3ZlgtGzdzHTRXGT6JOxu3jqT/FYWW0FiPywAB5g=="
+    },
+    {
+      "name": "wrong_sim_slot",
+      "plaintext": "{\"version\":1,\"success\":false,\"error_code\":\"wrong_sim_slot\",\"call_state\":\"idle\"}",
+      "nonce": "CQkJCQkJCQkJCQkJ",
+      "ciphertext": "lQCipgl4OgwM8cjPXHtfWwJGUl1bWj6I2Di0vk32abC1oV7gBjdwm/MX+4s2VR1fomPKi9rjs/NCRRUx97//I2TDNUl3Yg5yG2Q1GDUZAUTJI3LavMeRSC8uYEOAsTE="
+    },
+    {
+      "name": "modem_rejected",
+      "plaintext": "{\"version\":1,\"success\":false,\"error_code\":\"modem_rejected\",\"call_state\":\"idle\"}",
+      "nonce": "CQkJCQkJCQkJCQkJ",
+      "ciphertext": "lQCipgl4OgwM8cjPXHtfWwJGUl1bWj6I2Di0vk32abC1oV7gBjdwm/MX+5ErXhZVomLGjODzq/lSRRUx97//I2TDNUl3Yg5yG2Q1GDUZAcKANmYm5g9lKeUzKl4gfdk="
+    }
+  ]
+}
