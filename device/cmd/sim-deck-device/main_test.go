@@ -215,6 +215,15 @@ func (policy *fakeSlotPolicy) Configure(_ context.Context, update slotpolicy.Upd
 	return policy.settings, nil
 }
 func (policy *fakeSlotPolicy) RestartModem(context.Context) error { return nil }
+func (policy *fakeSlotPolicy) Profile(string) slotpolicy.Settings { return policy.settings }
+func (policy *fakeSlotPolicy) ConfigureProfile(ctx context.Context, _ string, update slotpolicy.Update) (slotpolicy.Settings, error) {
+	return policy.Configure(ctx, update)
+}
+func (policy *fakeSlotPolicy) SelectProfile(context.Context, string) error { return nil }
+func (policy *fakeSlotPolicy) ForgetProfile(string) error                  { return nil }
+func (policy *fakeSlotPolicy) ProbeWiFiCalling(context.Context, string) (slotpolicy.Settings, error) {
+	return policy.settings, nil
+}
 
 func (publisher *fakeMessageEventPublisher) Publish(_ context.Context, message sms.ReceivedMessage) error {
 	publisher.messages = append(publisher.messages, message)

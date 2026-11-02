@@ -243,12 +243,39 @@ type fakeSlotSettings struct {
 	update    slotpolicy.Update
 	err       error
 	restarted bool
+	profileID string
 }
 
 func (settings *fakeSlotSettings) Current() slotpolicy.Settings { return settings.settings }
 
 func (settings *fakeSlotSettings) Configure(_ context.Context, update slotpolicy.Update) (slotpolicy.Settings, error) {
 	settings.update = update
+	return settings.settings, settings.err
+}
+
+func (settings *fakeSlotSettings) Profile(profileID string) slotpolicy.Settings {
+	settings.profileID = profileID
+	return settings.settings
+}
+
+func (settings *fakeSlotSettings) ConfigureProfile(_ context.Context, profileID string, update slotpolicy.Update) (slotpolicy.Settings, error) {
+	settings.profileID = profileID
+	settings.update = update
+	return settings.settings, settings.err
+}
+
+func (settings *fakeSlotSettings) SelectProfile(_ context.Context, profileID string) error {
+	settings.profileID = profileID
+	return settings.err
+}
+
+func (settings *fakeSlotSettings) ForgetProfile(profileID string) error {
+	settings.profileID = profileID
+	return settings.err
+}
+
+func (settings *fakeSlotSettings) ProbeWiFiCalling(_ context.Context, profileID string) (slotpolicy.Settings, error) {
+	settings.profileID = profileID
 	return settings.settings, settings.err
 }
 
@@ -387,6 +414,54 @@ var _ = Describe("Encrypted command runtime", func() {
 		Expect(result.esimProfiles).NotTo(BeNil())
 		Expect(profiles.operation).To(Equal("download"))
 		Expect(profiles.name).To(Equal("LPA:1$example.test$matching-id"))
+	})
+
+	It("routes Wi-Fi Calling settings and probes to the installed eSIM profile", func() {
+		profileID := "89000000000000000001"
+		runtime.esimProfiles = &fakeESIMProfiles{profiles: []ESIMProfile{{ProfileID: profileID, Enabled: true}}}
+		enabled := true
+		result, err := runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.configure", SlotID: state.SlotID, SIMID: state.SIMID,
+			ESIMProfileID: profileID, WiFiCallingEnabled: &enabled,
+		}, testInstallationID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.slotSettings).NotTo(BeNil())
+		Expect(settings.profileID).To(Equal(profileID))
+		Expect(settings.update.WiFiCallingEnabled).NotTo(BeNil())
+		Expect(*settings.update.WiFiCallingEnabled).To(BeTrue())
+
+		_, err = runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.probe_vowifi", SlotID: state.SlotID, SIMID: state.SIMID,
+			ESIMProfileID: profileID,
+		}, testInstallationID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.profileID).To(Equal(profileID))
+
+		_, err = runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.configure", SlotID: state.SlotID, SIMID: state.SIMID,
+			ESIMProfileID: "89000000000000000099", WiFiCallingEnabled: &enabled,
+		}, testInstallationID)
+		Expect(err).To(MatchError(errESIMUnavailable))
+	})
+
+	It("resolves the active eSIM profile for outer SIM settings", func() {
+		profileID := "89000000000000000001"
+		runtime.esimSupported = true
+		runtime.esimProfiles = &fakeESIMProfiles{profiles: []ESIMProfile{{ProfileID: profileID, Enabled: true}}}
+		enabled := true
+		_, err := runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.configure", SlotID: state.SlotID, SIMID: state.SIMID,
+			WiFiCallingEnabled: &enabled,
+		}, testInstallationID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.profileID).To(Equal(profileID))
+		Expect(settings.update.WiFiCallingEnabled).NotTo(BeNil())
+
+		runtime.esimProfiles = &fakeESIMProfiles{}
+		_, err = runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "slot.configure", SlotID: state.SlotID, SIMID: state.SIMID,
+		}, testInstallationID)
+		Expect(err).To(MatchError(errESIMUnavailable))
 	})
 
 	It("returns an encrypted modem error for a rejected SMS", func() {

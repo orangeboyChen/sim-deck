@@ -3,6 +3,7 @@ package slotpolicy
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -75,6 +76,96 @@ var _ = Describe("Slot policy controller", func() {
 		reloaded, err := NewController(directory, commander, time.Second)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(reloaded.Current().VoLTEEnabled).To(BeTrue())
+	})
+
+	It("migrates existing slot preferences to the first active eSIM profile", func() {
+		path := filepath.Join(directory, "slot-policy.json")
+		Expect(os.WriteFile(path, []byte(`{"version":1,"data_enabled":false,"incoming_calls_enabled":true,"incoming_sms_enabled":true,"volte_enabled":true}`), 0o600)).To(Succeed())
+		controller, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(controller.SelectProfile(context.Background(), "89000000000000000001")).To(Succeed())
+		Expect(controller.Profile("89000000000000000001").DataEnabled).To(BeFalse())
+		Expect(controller.Profile("89000000000000000001").VoLTEEnabled).To(BeTrue())
+		Expect(commander.commands).To(BeEmpty())
+	})
+
+	It("keeps eSIM preferences separate and applies only the active profile", func() {
+		controller, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		first, second := "89000000000000000001", "89000000000000000002"
+		Expect(controller.SelectProfile(context.Background(), first)).To(Succeed())
+		enabled, disabled := true, false
+		_, err = controller.ConfigureProfile(context.Background(), first, Update{VoLTEEnabled: &enabled, DataEnabled: &disabled})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(commander.commands).To(Equal([]string{`AT+QCFG="ims",1`}))
+		_, err = controller.ConfigureProfile(context.Background(), second, Update{WiFiCallingEnabled: &enabled})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(commander.commands).To(HaveLen(1))
+		Expect(controller.Profile(second).WiFiCallingStatus).To(Equal("inactive_profile"))
+		Expect(controller.SelectProfile(context.Background(), second)).To(Succeed())
+		Expect(controller.Current().DataEnabled).To(BeTrue())
+		Expect(controller.Current().WiFiCallingEnabled).To(BeTrue())
+		Expect(controller.Current().WiFiCallingStatus).To(Equal("not_checked"))
+		Expect(commander.commands).To(Equal([]string{`AT+QCFG="ims",1`, `AT+QCFG="ims",0`}))
+
+		reloaded, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reloaded.Profile(first).DataEnabled).To(BeFalse())
+		Expect(reloaded.Profile(first).VoLTEEnabled).To(BeTrue())
+		Expect(reloaded.Profile(second).WiFiCallingEnabled).To(BeTrue())
+		Expect(reloaded.Current()).To(Equal(controller.Current()))
+	})
+
+	It("clears the deleted active profile and restores default policy", func() {
+		controller, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		profileID := "89000000000000000001"
+		Expect(controller.SelectProfile(context.Background(), profileID)).To(Succeed())
+		enabled := true
+		_, err = controller.ConfigureProfile(context.Background(), profileID, Update{VoLTEEnabled: &enabled})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(controller.ForgetProfile(profileID)).To(Succeed())
+		Expect(controller.SelectProfile(context.Background(), "")).To(Succeed())
+		Expect(controller.Current()).To(Equal(defaultSettings()))
+		Expect(controller.Profile(profileID)).To(Equal(defaultSettings()))
+		Expect(commander.commands).To(Equal([]string{`AT+QCFG="ims",1`, `AT+QCFG="ims",0`}))
+	})
+
+	It("reports gateway discovery without claiming VoWiFi registration", func() {
+		controller, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		commander.response = at.Response{Lines: []string{"460001234567890"}, Terminal: "OK"}
+		var names []string
+		controller.lookupIP = func(_ context.Context, name string) ([]net.IPAddr, error) {
+			names = append(names, name)
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, nil
+		}
+		enabled := true
+		settings, err := controller.Configure(context.Background(), Update{WiFiCallingEnabled: &enabled})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.WiFiCallingStatus).To(Equal("gateway_found"))
+		Expect(names).To(Equal([]string{"epdg.epc.mnc001.mcc460.pub.3gppnetwork.org"}))
+		Expect(commander.commands).To(Equal([]string{"AT+CIMI"}))
+	})
+
+	It("does not call a missing gateway an unsupported carrier", func() {
+		controller, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		commander.response = at.Response{Lines: []string{"460001234567890"}, Terminal: "OK"}
+		var names []string
+		controller.lookupIP = func(_ context.Context, name string) ([]net.IPAddr, error) {
+			names = append(names, name)
+			return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+		}
+		enabled := true
+		settings, err := controller.Configure(context.Background(), Update{WiFiCallingEnabled: &enabled})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.WiFiCallingStatus).To(Equal("gateway_not_found"))
+		Expect(names).To(Equal([]string{
+			"epdg.epc.mnc001.mcc460.pub.3gppnetwork.org",
+			"epdg.epc.mnc000.mcc460.pub.3gppnetwork.org",
+		}))
 	})
 
 	It("restarts the modem explicitly after an IMS setting change", func() {

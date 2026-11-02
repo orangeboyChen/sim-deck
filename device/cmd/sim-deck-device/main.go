@@ -582,6 +582,25 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	if err := session.ClearOrphanedCalls(ctx); err != nil {
 		return fmt.Errorf("reconcile modem calls after startup: %w", err)
 	}
+	if eSIMSupported {
+		if reader, ok := session.(esimProfileCommandReader); ok {
+			profiles, listError := reader.ListESIMProfiles(ctx)
+			if listError != nil {
+				logger.Warn("active eSIM profile policy could not be synchronized", "error", listError)
+			} else {
+				activeID := ""
+				for _, profile := range profiles {
+					if profile.Enabled {
+						activeID = profile.ICCID
+						break
+					}
+				}
+				if err := policy.SelectProfile(ctx, activeID); err != nil {
+					return fmt.Errorf("select active eSIM profile policy: %w", err)
+				}
+			}
+		}
+	}
 	if err := policy.Restore(ctx); err != nil {
 		return fmt.Errorf("restore slot policy: %w", err)
 	}
@@ -713,7 +732,7 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	if reader, ok := session.(esimProfileCommandReader); ok {
 		esimProfiles = modemESIMProfiles{reader: reader}
 	}
-	commands, err := dependencies.newCommands(config, deviceIdentity, session.Calls(), command.Dependencies{Events: events, Media: callMedia, Messages: session, ESIMProfiles: esimProfiles, SlotSettings: policy, Logger: logger})
+	commands, err := dependencies.newCommands(config, deviceIdentity, session.Calls(), command.Dependencies{Events: events, Media: callMedia, Messages: session, ESIMProfiles: esimProfiles, ESIMSupported: eSIMSupported, SlotSettings: policy, Logger: logger})
 	if err != nil {
 		return fmt.Errorf("create encrypted command runtime: %w", err)
 	}
