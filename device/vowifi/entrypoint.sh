@@ -1,4 +1,31 @@
 #!/usr/bin/env bash
+
+modem_usb_parent() {
+    local tty_name=${1##*/}
+    local path
+    path=$(readlink -f "${SIM_DECK_SYS_CLASS_TTY:-/sys/class/tty}/$tty_name/device") || return 1
+    while [[ "$path" != "/" ]]; do
+        if [[ -f "$path/idVendor" && -f "$path/idProduct" ]]; then
+            printf '%s\n' "$path"
+            return 0
+        fi
+        path=${path%/*}
+        [[ -n "$path" ]] || path=/
+    done
+    return 1
+}
+
+ports_share_modem() {
+    local first second
+    first=$(modem_usb_parent "$1") || return 1
+    second=$(modem_usb_parent "$2") || return 1
+    [[ "$first" == "$second" ]]
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 0
+fi
+
 set -euo pipefail
 
 config=/run/sim-deck-vowifi/config.toml
@@ -16,6 +43,10 @@ if [[ "$ims_at" == "$device_at" ]]; then
 fi
 if [[ ! "$ims_at" =~ ^/dev/ttyUSB[0-9]+$ || ! "$device_at" =~ ^/dev/ttyUSB[0-9]+$ ]]; then
     echo "VoWiFi AT ports must resolve to /dev/ttyUSB devices" >&2
+    exit 1
+fi
+if ! ports_share_modem "$ims_at" "$device_at"; then
+    echo "VoWiFi AT ports must belong to the same USB modem" >&2
     exit 1
 fi
 if [[ -z "${SIM_DECK_VOWIFI_SIP_PASSWORD:-}" ]]; then
