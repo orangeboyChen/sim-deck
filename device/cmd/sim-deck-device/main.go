@@ -568,34 +568,16 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 			"revision", modemIdentity.Revision,
 		)
 	}
-	if reader, readable := session.(interface {
-		ReadEUICCIdentifierWithQESIM(context.Context) (string, error)
-	}); readable {
-		if eid, eidError := reader.ReadEUICCIdentifierWithQESIM(ctx); eidError != nil {
-			if errors.Is(eidError, modem.ErrEUICCUnsupported) {
-				logger.Info("eUICC EID is not available through the modem eSIM channel")
-			} else {
-				logger.Warn("eUICC EID probe failed", "error", eidError)
-			}
+	if eid, eidError := readEUICCIdentifier(ctx, session); eidError != nil {
+		if errors.Is(eidError, modem.ErrEUICCUnsupported) {
+			logger.Info("eUICC EID is not available through the modem")
 		} else {
-			eSIMSupported = true
-			eSIMEID = eid
-			logger.Info("eUICC detected", "eid_suffix", eid[max(0, len(eid)-6):])
+			logger.Warn("eUICC EID probe failed", "error", eidError)
 		}
-	} else if reader, readable := session.(interface {
-		ReadEUICCIdentifier(context.Context) (string, error)
-	}); readable {
-		if eid, eidError := reader.ReadEUICCIdentifier(ctx); eidError != nil {
-			if errors.Is(eidError, modem.ErrEUICCUnsupported) {
-				logger.Info("eUICC EID is not available through the modem APDU channel")
-			} else {
-				logger.Warn("eUICC EID probe failed", "error", eidError)
-			}
-		} else {
-			eSIMSupported = true
-			eSIMEID = eid
-			logger.Info("eUICC detected", "eid_suffix", eid[max(0, len(eid)-6):])
-		}
+	} else {
+		eSIMSupported = true
+		eSIMEID = eid
+		logger.Info("eUICC detected", "eid_suffix", eid[max(0, len(eid)-6):])
 	}
 	if err := session.ClearOrphanedCalls(ctx); err != nil {
 		return fmt.Errorf("reconcile modem calls after startup: %w", err)
@@ -764,9 +746,15 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	go func() { results <- events.Run(runContext) }()
 	go func() { results <- incomingCalls.Run(runContext) }()
 	go func() { results <- radioStatus.Run(runContext) }()
-	go func() {
-		results <- synchronizeSIMIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger)
-	}()
+	if eSIMSupported {
+		go func() {
+			results <- synchronizeEUICCIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger)
+		}()
+	} else {
+		go func() {
+			results <- synchronizeSIMIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger)
+		}()
+	}
 	first := <-results
 	cancel()
 	resultsToCheck := []error{first}
@@ -791,6 +779,57 @@ func synchronizeSIMIdentity(
 	synchronize func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error),
 	logger *slog.Logger,
 ) error {
+	return synchronizeSIMIdentityWithFingerprint(ctx, session, config, store, state, synchronize, logger, func(ctx context.Context, current identity.State) (string, error) {
+		iccid, err := session.ReadSIMICCID(ctx)
+		if err != nil {
+			return "", err
+		}
+		return current.FingerprintSIM(iccid)
+	})
+}
+
+func readEUICCIdentifier(ctx context.Context, session deviceSession) (string, error) {
+	if reader, readable := session.(interface {
+		ReadEUICCIdentifierWithQESIM(context.Context) (string, error)
+	}); readable {
+		return reader.ReadEUICCIdentifierWithQESIM(ctx)
+	}
+	if reader, readable := session.(interface {
+		ReadEUICCIdentifier(context.Context) (string, error)
+	}); readable {
+		return reader.ReadEUICCIdentifier(ctx)
+	}
+	return "", modem.ErrEUICCUnsupported
+}
+
+func synchronizeEUICCIdentity(
+	ctx context.Context,
+	session deviceSession,
+	config agent.Config,
+	store identity.Store,
+	state identity.State,
+	synchronize func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error),
+	logger *slog.Logger,
+) error {
+	return synchronizeSIMIdentityWithFingerprint(ctx, session, config, store, state, synchronize, logger, func(ctx context.Context, current identity.State) (string, error) {
+		eid, err := readEUICCIdentifier(ctx, session)
+		if err != nil {
+			return "", err
+		}
+		return current.FingerprintEUICC(eid)
+	})
+}
+
+func synchronizeSIMIdentityWithFingerprint(
+	ctx context.Context,
+	session deviceSession,
+	config agent.Config,
+	store identity.Store,
+	state identity.State,
+	synchronize func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error),
+	logger *slog.Logger,
+	fingerprintIdentity func(context.Context, identity.State) (string, error),
+) error {
 	interval := config.RadioStatusPoll
 	if interval <= 0 {
 		interval = 15 * time.Second
@@ -803,13 +842,12 @@ func synchronizeSIMIdentity(
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			iccid, err := session.ReadSIMICCID(ctx)
+			fingerprint, err := fingerprintIdentity(ctx, current)
 			if err != nil {
 				logger.Warn("SIM identity poll failed", "slot_key", current.SlotKey, "error", err)
 				continue
 			}
-			fingerprint, err := current.FingerprintSIM(iccid)
-			if err != nil || fingerprint == current.SIMFingerprint {
+			if fingerprint == current.SIMFingerprint {
 				continue
 			}
 			requestState := current

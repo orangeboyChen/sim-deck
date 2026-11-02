@@ -913,6 +913,44 @@ var _ = Describe("Device command runtime", func() {
 		Expect(synchronizations.Load()).To(BeZero())
 	})
 
+	It("uses the eUICC EID instead of the active profile ICCID when polling identity", func() {
+		const eid = "89086030202200000026000455069085"
+		store, state := configuredSIMIdentity(GinkgoT().TempDir(), "8986000000000000000")
+		fingerprint, err := state.FingerprintEUICC(eid)
+		Expect(err).NotTo(HaveOccurred())
+		state, err = store.SetSIMIdentity(state, fingerprint, state.SIMID, state.NumericID)
+		Expect(err).NotTo(HaveOccurred())
+		var eidPolls atomic.Int32
+		var iccidPolls atomic.Int32
+		session := &fakeDeviceSession{
+			readEUICC: func(context.Context) (string, error) {
+				eidPolls.Add(1)
+				return eid, nil
+			},
+			readSIMICCID: func(context.Context) (string, error) {
+				iccidPolls.Add(1)
+				return "8986000000000000001", nil
+			},
+		}
+		var synchronizations atomic.Int32
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		config := testConfig(GinkgoT().TempDir())
+
+		go func() {
+			result <- synchronizeEUICCIdentity(ctx, session, config, store, state, func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error) {
+				synchronizations.Add(1)
+				return serverapi.SIMAssignment{}, errors.New("unexpected eUICC replacement")
+			}, logger)
+		}()
+
+		Eventually(eidPolls.Load).Should(BeNumerically(">=", 2))
+		cancel()
+		Eventually(result).Should(Receive(MatchError(context.Canceled)))
+		Expect(iccidPolls.Load()).To(BeZero())
+		Expect(synchronizations.Load()).To(BeZero())
+	})
+
 	It("retries SIM reads and server synchronization before atomically replacing the assignment", func() {
 		const oldICCID = "8986000000000000000"
 		const newICCID = "8986000000000000001"
