@@ -95,6 +95,23 @@ protocol ESIMProfileManaging: AnyObject {
 }
 
 @MainActor
+protocol ESIMProfileMetadataStore: AnyObject {
+    func listESIMProfiles(simID: UUID) async throws -> [Relay_Communication_V1_EsimProfile]
+    func addESIMProfile(
+        simID: UUID,
+        profileID: String,
+        name: String,
+        iccid: String,
+        operatorName: String
+    ) async throws -> Relay_Communication_V1_EsimProfile
+    func renameESIMProfile(simID: UUID, profileID: String, name: String) async throws -> Relay_Communication_V1_EsimProfile
+    func setESIMProfileEnabled(simID: UUID, profileID: String, enabled: Bool) async throws -> Relay_Communication_V1_EsimProfile
+    func deleteESIMProfile(simID: UUID, profileID: String) async throws
+}
+
+extension ServerConnectionManager: ESIMProfileMetadataStore {}
+
+@MainActor
 protocol ESIMDeviceProfileTransport: AnyObject {
     func list(line: DeviceLineIdentity) async throws -> [DeviceESIMProfile]
     func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> [DeviceESIMProfile]
@@ -278,21 +295,27 @@ final class UnavailableESIMProfileManager: ESIMProfileManaging {
 /// are sealed for the target device and never stored on the server.
 @MainActor
 final class LiveESIMProfileManager: ESIMProfileManaging {
-    private let server: ServerConnectionManager
+    private let metadataStore: any ESIMProfileMetadataStore
     private let device: ESIMDeviceProfileTransport
 
     init(server: ServerConnectionManager, device: ESIMDeviceProfileTransport? = nil) {
-        self.server = server
+        metadataStore = server
         self.device = device ?? LiveESIMDeviceProfileTransport(
             api: server,
             commandSigner: InstallationCommandSigner()
         )
     }
 
+    init(metadataStore: any ESIMProfileMetadataStore, device: ESIMDeviceProfileTransport) {
+        self.metadataStore = metadataStore
+        self.device = device
+    }
+
     func loadProfiles(line: DeviceLineIdentity) async throws -> [ESIMProfile] {
         let simID = try requireSIMID(line)
         let modemProfiles = try await device.list(line: line)
-        let metadata = try await server.listESIMProfiles(simID: simID)
+        guard !modemProfiles.isEmpty else { return [] }
+        let metadata = try await metadataStore.listESIMProfiles(simID: simID)
         return modemProfiles.map { profile in
             let stored = metadata.first { $0.profileID == profile.profileID }
             return makeProfile(profile, metadata: stored)
@@ -303,7 +326,7 @@ final class LiveESIMProfileManager: ESIMProfileManaging {
         let simID = try requireSIMID(line)
         try await device.setEnabled(enabled, profileID: profile.profileID, line: line)
         _ = try await ensureMetadata(profile, simID: simID)
-        let updated = try await server.setESIMProfileEnabled(
+        let updated = try await metadataStore.setESIMProfileEnabled(
             simID: simID, profileID: profile.profileID, enabled: enabled
         )
         return makeProfile(updated, preservingID: profile.id)
@@ -315,7 +338,7 @@ final class LiveESIMProfileManager: ESIMProfileManaging {
         guard !trimmedName.isEmpty else { throw ESIMProfileManagerError.invalidActivationCode }
         try await device.rename(trimmedName, profileID: profile.profileID, line: line)
         _ = try await ensureMetadata(profile, simID: simID)
-        let updated = try await server.renameESIMProfile(
+        let updated = try await metadataStore.renameESIMProfile(
             simID: simID, profileID: profile.profileID, name: trimmedName
         )
         var renamed = makeProfile(updated, preservingID: profile.id)
@@ -328,7 +351,7 @@ final class LiveESIMProfileManager: ESIMProfileManaging {
     func delete(profile: ESIMProfile, line: DeviceLineIdentity) async throws {
         let simID = try requireSIMID(line)
         try await device.delete(profileID: profile.profileID, line: line)
-        try await server.deleteESIMProfile(simID: simID, profileID: profile.profileID)
+        try await metadataStore.deleteESIMProfile(simID: simID, profileID: profile.profileID)
     }
 
     func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> ESIMProfile {
@@ -343,7 +366,7 @@ final class LiveESIMProfileManager: ESIMProfileManaging {
             !before.contains { $0.profileID == candidate.profileID }
         } ?? after.last
         guard let installed else { throw ESIMProfileManagerError.unavailable }
-        let metadata = try await server.addESIMProfile(
+        let metadata = try await metadataStore.addESIMProfile(
             simID: simID,
             profileID: installed.profileID,
             name: "",
@@ -386,9 +409,9 @@ final class LiveESIMProfileManager: ESIMProfileManaging {
         _ profile: ESIMProfile,
         simID: UUID
     ) async throws -> Relay_Communication_V1_EsimProfile {
-        let existing = try await server.listESIMProfiles(simID: simID).first { $0.profileID == profile.profileID }
+        let existing = try await metadataStore.listESIMProfiles(simID: simID).first { $0.profileID == profile.profileID }
         if let existing { return existing }
-        return try await server.addESIMProfile(
+        return try await metadataStore.addESIMProfile(
             simID: simID,
             profileID: profile.profileID,
             name: profile.name,

@@ -3,9 +3,33 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import XCTest
+import RelayProtocol
 @testable import SimDeck
 
 final class ESIMProfileTests: XCTestCase {
+    @MainActor
+    func testEmptyModemProfileListDoesNotRequireServerMetadata() async throws {
+        let metadata = ESIMMetadataStoreFake()
+        metadata.listError = TestError.failed
+        let manager = LiveESIMProfileManager(metadataStore: metadata, device: EmptyESIMDeviceTransport())
+        let line = DeviceLineIdentity(
+            id: UUID(),
+            deviceID: UUID(),
+            simID: UUID(),
+            numericID: 2,
+            deviceName: "Modem",
+            lineName: "",
+            phoneNumber: "",
+            isOnline: true,
+            commandPublicKey: nil,
+            simKind: .eSIM
+        )
+
+        let profiles = try await manager.loadProfiles(line: line)
+        XCTAssertEqual(profiles, [])
+        XCTAssertEqual(metadata.listCalls, 0)
+    }
+
     func testSuccessfulCommandWithoutProfilesIsAnEmptyList() throws {
         let result = try JSONDecoder().decode(
             CallCommandResult.self,
@@ -42,4 +66,45 @@ final class ESIMProfileTests: XCTestCase {
             "Example Mobile · 8986000000000000001"
         )
     }
+}
+
+@MainActor
+private final class EmptyESIMDeviceTransport: ESIMDeviceProfileTransport {
+    func list(line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] { [] }
+    func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] { [] }
+    func setEnabled(_ enabled: Bool, profileID: String, line: DeviceLineIdentity) async throws {}
+    func rename(_ name: String, profileID: String, line: DeviceLineIdentity) async throws {}
+    func delete(profileID: String, line: DeviceLineIdentity) async throws {}
+}
+
+@MainActor
+private final class ESIMMetadataStoreFake: ESIMProfileMetadataStore {
+    var listCalls = 0
+    var listError: Error?
+
+    func listESIMProfiles(simID: UUID) async throws -> [Relay_Communication_V1_EsimProfile] {
+        listCalls += 1
+        if let listError { throw listError }
+        return []
+    }
+
+    func addESIMProfile(simID: UUID, profileID: String, name: String, iccid: String, operatorName: String) async throws -> Relay_Communication_V1_EsimProfile {
+        throw TestError.failed
+    }
+
+    func renameESIMProfile(simID: UUID, profileID: String, name: String) async throws -> Relay_Communication_V1_EsimProfile {
+        throw TestError.failed
+    }
+
+    func setESIMProfileEnabled(simID: UUID, profileID: String, enabled: Bool) async throws -> Relay_Communication_V1_EsimProfile {
+        throw TestError.failed
+    }
+
+    func deleteESIMProfile(simID: UUID, profileID: String) async throws {
+        throw TestError.failed
+    }
+}
+
+private enum TestError: Error {
+    case failed
 }
