@@ -17,6 +17,7 @@ import (
 type fakeCommander struct {
 	responses map[string]at.Response
 	err       error
+	commands  []string
 }
 
 type sequencedCommander struct {
@@ -32,6 +33,7 @@ func (commander *sequencedCommander) Send(_ context.Context, command string) (at
 }
 
 func (commander *fakeCommander) Send(_ context.Context, command string) (at.Response, error) {
+	commander.commands = append(commander.commands, command)
 	if commander.err != nil {
 		return at.Response{}, commander.err
 	}
@@ -136,8 +138,7 @@ var _ = Describe("Radio status runtime", func() {
 			"AT+CEREG?":  {Lines: []string{"+CEREG: 0,2"}, Terminal: "OK"},
 			"AT+CREG?":   {Lines: []string{"+CREG: 0,0"}, Terminal: "OK"},
 			"AT+CGREG?":  {Lines: []string{"+CGREG: 0,2"}, Terminal: "OK"},
-			"AT+QNWINFO": {Lines: []string{`+QNWINFO: "No Service"`}, Terminal: "OK"},
-			"AT+CSQ":     {Lines: []string{"+CSQ: 99,99"}, Terminal: "OK"},
+			"AT+QNWINFO": {Terminal: "+CME ERROR: no network service"},
 		}}
 		runtime, err := NewRuntime(commander, &fakeRemote{}, state, time.Hour, time.Second)
 		Expect(err).NotTo(HaveOccurred())
@@ -147,6 +148,7 @@ var _ = Describe("Radio status runtime", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(status.RadioAccessTechnology).To(Equal("unknown"))
 		Expect(status.SignalBars).To(BeNil())
+		Expect(commander.commands).NotTo(ContainElement("AT+QNWINFO"))
 	})
 
 	It("falls back to packet registration and still publishes current radio readings", func() {
@@ -168,7 +170,7 @@ var _ = Describe("Radio status runtime", func() {
 		Expect(*status.SignalBars).To(Equal(2))
 	})
 
-	It("reports signal while cellular registration is still pending", func() {
+	It("reports no signal while cellular registration is still pending", func() {
 		commander := &fakeCommander{responses: map[string]at.Response{
 			"AT+CEREG?":  {Lines: []string{"+CEREG: 0,2"}, Terminal: "OK"},
 			"AT+CREG?":   {Lines: []string{"+CREG: 0,2"}, Terminal: "OK"},
@@ -182,9 +184,8 @@ var _ = Describe("Radio status runtime", func() {
 		status, err := runtime.read(context.Background())
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(status.RadioAccessTechnology).To(Equal("lte"))
-		Expect(status.SignalBars).NotTo(BeNil())
-		Expect(*status.SignalBars).To(Equal(3))
+		Expect(status.RadioAccessTechnology).To(Equal("unknown"))
+		Expect(status.SignalBars).To(BeNil())
 	})
 
 	DescribeTable("parses modem registration states",

@@ -111,9 +111,15 @@ func (runtime *Runtime) publish(ctx context.Context) error {
 }
 
 func (runtime *Runtime) read(ctx context.Context) (Status, error) {
-	_, err := runtime.readRegistration(ctx)
+	registered, err := runtime.readRegistration(ctx)
 	if err != nil {
 		return Status{}, err
+	}
+	if !registered {
+		return Status{
+			RadioAccessTechnology: "unknown",
+			SlotSettings:          runtime.currentSlotSettings(),
+		}, nil
 	}
 
 	network, err := runtime.send(ctx, "AT+QNWINFO")
@@ -191,6 +197,10 @@ func (runtime *Runtime) readRegistration(ctx context.Context) (bool, error) {
 	}
 	if !registrationFound {
 		if !eps.OK() && !circuit.OK() && !packet.OK() {
+			if isUnavailableNetworkResponse(eps) && isUnavailableNetworkResponse(circuit) && isUnavailableNetworkResponse(packet) {
+				runtime.logger.Warn("modem has no cellular service; reporting no signal", "device_uuid", runtime.identity.DeviceUUID)
+				return false, nil
+			}
 			return false, fmt.Errorf("modem rejected registration queries: EPS %s, circuit %s, packet %s", eps.Terminal, circuit.Terminal, packet.Terminal)
 		}
 		return false, errors.New("modem registration response is missing +CEREG, +CREG, and +CGREG status")
@@ -203,6 +213,11 @@ func (runtime *Runtime) readRegistration(ctx context.Context) (bool, error) {
 		"packet_registration_status", packetStatus,
 	)
 	return false, nil
+}
+
+func isUnavailableNetworkResponse(response at.Response) bool {
+	message := strings.ToLower(strings.TrimSpace(response.Terminal))
+	return strings.Contains(message, "no network service") || strings.Contains(message, "sim not inserted") || strings.Contains(message, "no sim") || message == "+cme error: 30" || message == "+cme error: 10"
 }
 
 func (runtime *Runtime) send(ctx context.Context, command string) (at.Response, error) {

@@ -88,6 +88,7 @@ func ReadSIMSlotIndexes(ctx context.Context, client *at.Client, timeout time.Dur
 var ErrMessageDeliveryDeferred = errors.New("SMS delivery deferred")
 var ErrSIMSlotUnsupported = errors.New("modem does not expose SIM slot status")
 var ErrEUICCUnsupported = errors.New("modem does not expose an eUICC EID")
+var ErrSIMNotInserted = errors.New("SIM not inserted")
 
 const (
 	esimTransactionChunkSize = 1400
@@ -1136,31 +1137,65 @@ func (session *Session) removeMessageReference(reference byte, messageID string)
 // Initialize configures modem notifications and imports stored messages before readiness.
 func (session *Session) Initialize(ctx context.Context) error {
 	simStatus, err := session.querySIMStatus(ctx)
-	if err != nil {
+	simInserted := !errors.Is(err, ErrSIMNotInserted)
+	if err != nil && simInserted {
 		return err
 	}
-	if simStatus != "READY" {
+	if simInserted && simStatus != "READY" {
 		return fmt.Errorf("modem SIM is not ready: %s", simStatus)
+	}
+	if !simInserted {
+		session.logger.Warn("no SIM is inserted; starting modem without SIM-dependent services")
 	}
 
 	var response at.Response
 	for _, command := range initializationCommands {
+		if !simInserted && (command == `AT+CPMS="MT","MT","MT"` || command == "AT+CNMI=2,1,0,1,0" || command == "AT+CCWA=1,1") {
+			continue
+		}
 		response, err = session.send(ctx, command)
 		if err != nil {
 			return err
 		}
 		if !response.OK() {
+			if isNoNetworkService(response.Terminal) || (command != "AT+CCWA=1,1" && isSIMNotInserted(response.Terminal)) {
+				session.logger.Warn("SIM or network dependent modem initialization deferred", "command", command, "error", response.Terminal)
+				continue
+			}
 			return fmt.Errorf("modem rejected initialization command %s: %s", command, response.Terminal)
 		}
 	}
-	if err := session.ensureAutomaticOperatorSelection(ctx); err != nil {
-		return err
+	if simInserted {
+		if err := session.ensureAutomaticOperatorSelection(ctx); err != nil && !isUnavailableModemError(err) {
+			return err
+		}
+	} else {
+		session.logger.Info("operator selection deferred until a SIM is inserted")
 	}
 
-	if err := session.importStoredSMS(ctx); err != nil {
-		return fmt.Errorf("import SMS history: %w", err)
+	if simInserted {
+		if err := session.importStoredSMS(ctx); err != nil {
+			if isUnavailableModemError(err) {
+				session.logger.Warn("stored SMS import deferred until SIM and network are available", "error", err)
+				return session.RetryPendingSMS(ctx)
+			}
+			return fmt.Errorf("import SMS history: %w", err)
+		}
 	}
 	return session.RetryPendingSMS(ctx)
+}
+
+func isNoNetworkService(terminal string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(terminal))
+	return strings.Contains(normalized, "no network service") || normalized == "+cme error: 30"
+}
+
+func isUnavailableModemError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no network service") || strings.Contains(message, "sim not inserted") || strings.Contains(message, "no sim") || strings.Contains(message, "+cme error: 10") || strings.Contains(message, "+cme error: 30")
 }
 
 // ClearOrphanedCalls ends carrier calls that survived a previous agent process.
@@ -1278,6 +1313,9 @@ func (session *Session) querySIMStatus(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("query SIM readiness: %w", err)
 		}
 		if !response.OK() {
+			if isSIMNotInserted(response.Terminal) {
+				return "", ErrSIMNotInserted
+			}
 			return "", fmt.Errorf("modem rejected SIM readiness query: %s", response.Terminal)
 		}
 		if simStatus, ok := parseSIMStatus(response.Lines); ok {
@@ -1295,6 +1333,11 @@ func (session *Session) querySIMStatus(ctx context.Context) (string, error) {
 		}
 	}
 	return "", errors.New("modem SIM readiness response is missing +CPIN")
+}
+
+func isSIMNotInserted(terminal string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(terminal))
+	return strings.Contains(normalized, "sim not inserted") || normalized == "+cme error: 10"
 }
 
 // RetryPendingSMS delivers every durable incoming message not yet accepted downstream.

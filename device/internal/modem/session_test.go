@@ -432,6 +432,8 @@ var _ = Describe("Modem session", func() {
 					_, _ = modemTransport.Write([]byte("+CPIN: READY\r\nOK\r\n"))
 				case operatorSelectionQuery + "\r":
 					_, _ = modemTransport.Write([]byte("+COPS: 0,0,\"CHINA MOBILE\",7\r\nOK\r\n"))
+				case "AT+CCWA=1,1\r":
+					_, _ = modemTransport.Write([]byte("+CME ERROR: no network service\r\n"))
 				case "AT+CMGL=4\r":
 					_, _ = modemTransport.Write([]byte("+CMGL: 1,0,,23\r\n" + testDeliverPDU + "\r\n+CMGL: 2,0,,1\r\nnot-hex\r\nOK\r\n"))
 				default:
@@ -856,8 +858,29 @@ var _ = Describe("Modem session", func() {
 		},
 		Entry("when the SIM requires a PIN", "+CPIN: SIM PIN\r\nOK\r\n", "modem SIM is not ready: SIM PIN"),
 		Entry("when the modem omits CPIN status", "OK\r\n", "modem SIM readiness response is missing +CPIN"),
-		Entry("when the modem rejects the query", "+CME ERROR: SIM not inserted\r\n", "modem rejected SIM readiness query: +CME ERROR: SIM not inserted"),
 	)
+
+	It("starts without a SIM and defers SIM-dependent initialization", func() {
+		session, modemTransport, client := newTestSession(MessageSinkFunc(func(context.Context, sms.ReceivedMessage) error { return nil }))
+		DeferCleanup(func() {
+			_ = client.Close()
+			_ = modemTransport.Close()
+		})
+		go func() {
+			reader := bufio.NewReader(modemTransport)
+			_, _ = reader.ReadString('\r')
+			_, _ = modemTransport.Write([]byte("+CME ERROR: SIM not inserted\r\n"))
+			for _, expected := range []string{"ATE0", "AT+CMEE=2", "AT+CFUN=1", "AT+CMGF=0", "AT+CLIP=1"} {
+				command, err := reader.ReadString('\r')
+				if err != nil || strings.TrimSuffix(command, "\r") != expected {
+					return
+				}
+				_, _ = modemTransport.Write([]byte("OK\r\n"))
+			}
+		}()
+
+		Expect(session.Initialize(context.Background())).To(Succeed())
+	})
 
 	It("retries a successful SIM query when a stale response omits CPIN", func() {
 		session, modemTransport, client := newTestSession(MessageSinkFunc(func(context.Context, sms.ReceivedMessage) error { return nil }))
