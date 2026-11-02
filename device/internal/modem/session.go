@@ -622,7 +622,7 @@ func parseQESIMMutation(response at.Response, operation string) error {
 }
 
 func parseQESIMList(lines []string) ([]ESIMProfile, int, bool) {
-	var profiles []ESIMProfile
+	profiles := make([]ESIMProfile, 0)
 	result := 0
 	foundHeader := false
 	for _, line := range lines {

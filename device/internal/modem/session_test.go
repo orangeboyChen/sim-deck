@@ -119,6 +119,7 @@ var _ = Describe("Modem session", func() {
 
 		Expect(ok).To(BeTrue())
 		Expect(result).To(Equal(0))
+		Expect(profiles).NotTo(BeNil())
 		Expect(profiles).To(BeEmpty())
 	})
 
