@@ -35,7 +35,13 @@ struct SIMManagementScreen: View {
         .confirmationDialog("Delete this offline SIM?", isPresented: Binding(get: { simToDelete != nil }, set: { if !$0 { simToDelete = nil } }), titleVisibility: .visible, presenting: simToDelete) { sim in
             Button("Delete SIM", role: .destructive) {
                 Task {
-                    do { try await model.removeSIM(sim) }
+                    do {
+                        if let line = line(for: sim), !line.isOnline {
+                            try await model.removeSIM(line: line)
+                        } else {
+                            try await model.removeSIM(sim)
+                        }
+                    }
                     catch { errorDescription = error.localizedDescription }
                     simToDelete = nil
                 }
@@ -58,6 +64,11 @@ struct SIMManagementScreen: View {
                     SIMSettingsScreen(model: model, line: line)
                 } label: {
                     ManagedSIMRow(sim: sim, delete: nil)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    if !line.isOnline {
+                        Button("Delete", role: .destructive) { simToDelete = sim }
+                    }
                 }
             )
         }

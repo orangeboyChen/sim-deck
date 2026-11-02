@@ -30,6 +30,12 @@ struct SettingsScreen: View {
                 }
             }
 
+            Section("SIM Cards") {
+                SettingsLink("All SIM Cards", symbol: "simcard") {
+                    SIMManagementScreen(model: model)
+                }
+            }
+
             Section("Data") {
                 SettingsLink("Messages & Storage", symbol: "externaldrive") {
                     StorageSettingsScreen(model: model)
