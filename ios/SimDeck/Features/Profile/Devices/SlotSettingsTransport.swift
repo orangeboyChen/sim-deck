@@ -12,6 +12,7 @@ struct SlotSettings: Codable, Equatable, Sendable {
     var incomingSMSEnabled: Bool
     var volteEnabled: Bool
     var wifiCallingEnabled: Bool
+    var wifiCallingAvailable: Bool
     var wifiCallingStatus: String
     var mmsAPN: String
     var mmscURL: String
@@ -26,6 +27,7 @@ struct SlotSettings: Codable, Equatable, Sendable {
         incomingSMSEnabled: Bool,
         volteEnabled: Bool = false,
         wifiCallingEnabled: Bool = false,
+        wifiCallingAvailable: Bool = false,
         wifiCallingStatus: String = "",
         mmsAPN: String = "",
         mmscURL: String = "",
@@ -39,6 +41,7 @@ struct SlotSettings: Codable, Equatable, Sendable {
         self.incomingSMSEnabled = incomingSMSEnabled
         self.volteEnabled = volteEnabled
         self.wifiCallingEnabled = wifiCallingEnabled
+        self.wifiCallingAvailable = wifiCallingAvailable
         self.wifiCallingStatus = wifiCallingStatus
         self.mmsAPN = mmsAPN
         self.mmscURL = mmscURL
@@ -55,6 +58,7 @@ struct SlotSettings: Codable, Equatable, Sendable {
         incomingSMSEnabled = try container.decode(Bool.self, forKey: .incomingSMSEnabled)
         volteEnabled = try container.decodeIfPresent(Bool.self, forKey: .volteEnabled) ?? false
         wifiCallingEnabled = try container.decodeIfPresent(Bool.self, forKey: .wifiCallingEnabled) ?? false
+        wifiCallingAvailable = try container.decodeIfPresent(Bool.self, forKey: .wifiCallingAvailable) ?? false
         wifiCallingStatus = try container.decodeIfPresent(String.self, forKey: .wifiCallingStatus) ?? ""
         mmsAPN = try container.decodeIfPresent(String.self, forKey: .mmsAPN) ?? ""
         mmscURL = try container.decodeIfPresent(String.self, forKey: .mmscURL) ?? ""
@@ -78,6 +82,7 @@ struct SlotSettings: Codable, Equatable, Sendable {
         case incomingSMSEnabled = "incoming_sms_enabled"
         case volteEnabled = "volte_enabled"
         case wifiCallingEnabled = "wifi_calling_enabled"
+        case wifiCallingAvailable = "wifi_calling_available"
         case wifiCallingStatus = "wifi_calling_status"
         case mmsAPN = "mms_apn"
         case mmscURL = "mmsc_url"
@@ -225,7 +230,7 @@ final class LiveSlotSettingsTransport: SlotSettingsTransport {
             incomingSMSEnabled: settings?.incomingSMSEnabled,
             volteEnabled: settings?.volteEnabled,
             esimProfileID: profileID,
-            wifiCallingEnabled: nil,
+            wifiCallingEnabled: settings?.wifiCallingAvailable == true ? settings?.wifiCallingEnabled : nil,
             mmsAPN: settings?.mmsAPN,
             mmscURL: settings?.mmscURL,
             mmsProxyHost: settings?.mmsProxyHost,

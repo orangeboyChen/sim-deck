@@ -38,7 +38,7 @@ struct SlotSettingsScreen: View {
             if let settings {
                 SlotControlSection(settings: binding(for: settings), isActiveProfile: isActiveProfile)
                 WiFiCallingSection(
-                    settings: settings,
+                    settings: binding(for: settings),
                     canRefresh: isActiveProfile && settings == original && !isSaving && !isProbing,
                     isProbing: isProbing,
                     refresh: probeWiFiCalling
@@ -214,26 +214,37 @@ struct SlotControlSection: View {
 }
 
 struct WiFiCallingSection: View {
-    let settings: SlotSettings
+    @Binding var settings: SlotSettings
     let canRefresh: Bool
     let isProbing: Bool
     let refresh: () -> Void
 
     var body: some View {
         Section {
-            LabeledContent("Gateway check", value: statusDescription)
+            if settings.wifiCallingAvailable {
+                Toggle("Wi-Fi Calling", isOn: $settings.wifiCallingEnabled)
+            }
+            LabeledContent(settings.wifiCallingAvailable ? "IMS registration" : "Gateway check", value: statusDescription)
             Button("Check Again", action: refresh)
                 .disabled(!canRefresh)
         } header: {
             Text("Wi-Fi Calling")
         } footer: {
-            Text("This device can check for a carrier gateway, but cannot yet register with carrier IMS over Wi-Fi. Calls still use the cellular modem.")
+            if settings.wifiCallingAvailable {
+                Text("Calls use Wi-Fi when carrier IMS is registered. Cellular calling remains available when Wi-Fi Calling is offline.")
+            } else {
+                Text("This device can check for a carrier gateway, but cannot yet register with carrier IMS over Wi-Fi. Calls still use the cellular modem.")
+            }
         }
     }
 
     private var statusDescription: String {
         if isProbing { return String(localized: "Checking…") }
         switch settings.wifiCallingStatus {
+        case "ims_registered": return String(localized: "Registered over Wi-Fi")
+        case "ims_unregistered": return String(localized: "Not registered")
+        case "ims_reconnecting": return String(localized: "Registering new SIM plan")
+        case "backend_unavailable": return String(localized: "IMS gateway unavailable")
         case "inactive_profile": return String(localized: "Activate this plan to check")
         case "gateway_found": return String(localized: "Gateway found; calling unavailable")
         case "gateway_not_found": return String(localized: "No standard gateway found")

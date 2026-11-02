@@ -195,7 +195,7 @@ struct SIMSettingsScreen: View {
             if let slotSettings {
                 SlotControlSection(settings: slotSettingsBinding(for: slotSettings))
                 WiFiCallingSection(
-                    settings: slotSettings,
+                    settings: slotSettingsBinding(for: slotSettings),
                     canRefresh: slotSettings == originalSlotSettings
                         && !isWorking && !isProbingWiFiCalling && line.isOnline,
                     isProbing: isProbingWiFiCalling,

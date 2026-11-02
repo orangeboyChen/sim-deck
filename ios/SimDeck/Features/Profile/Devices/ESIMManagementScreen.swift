@@ -212,6 +212,9 @@ private struct ESIMProfileDetailScreen: View {
                 if let profileSettings {
                     LabeledContent("Mobile Data", value: profileSettings.dataEnabled ? String(localized: "On") : String(localized: "Off"))
                     LabeledContent("VoLTE", value: profileSettings.volteEnabled ? String(localized: "On") : String(localized: "Off"))
+                    if profileSettings.wifiCallingAvailable {
+                        LabeledContent("Wi-Fi Calling", value: profileSettings.wifiCallingEnabled ? String(localized: "On") : String(localized: "Off"))
+                    }
                     LabeledContent("Gateway check", value: wifiCallingSummary(profileSettings))
                 }
                 if profile.isEnabled {
@@ -274,6 +277,10 @@ private struct ESIMProfileDetailScreen: View {
     private func wifiCallingSummary(_ settings: SlotSettings) -> String {
         if !profile.isEnabled { return String(localized: "Activate this plan to check") }
         switch settings.wifiCallingStatus {
+        case "ims_registered": return String(localized: "Registered over Wi-Fi")
+        case "ims_unregistered": return String(localized: "Not registered")
+        case "ims_reconnecting": return String(localized: "Registering new SIM plan")
+        case "backend_unavailable": return String(localized: "IMS gateway unavailable")
         case "gateway_found": return String(localized: "Gateway found; calling unavailable")
         case "gateway_not_found": return String(localized: "No standard gateway found")
         case "probe_failed": return String(localized: "Check failed")
