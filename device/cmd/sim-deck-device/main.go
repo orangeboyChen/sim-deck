@@ -685,18 +685,21 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 			profile, readError := reader.ReadSIMProfile(ctx)
 			if readError != nil {
 				logger.Warn("SIM profile is unavailable", "slot_key", deviceIdentity.SlotKey, "slot_index", deviceIdentity.SlotIndex, "error", readError)
-			} else if profile.PhoneNumber == "" && profile.Operator == "" && !eSIMSupported {
-				logger.Warn("SIM profile is empty", "slot_key", deviceIdentity.SlotKey, "slot_index", deviceIdentity.SlotIndex, "subscriber_number_provisioned", false, "operator_available", false)
-			} else {
-				simKind := "physical"
-				if eSIMSupported {
-					simKind = "eSIM"
-				}
-				publishError := publisher.PublishSIMProfile(ctx, messageevent.SIMProfile{PhoneNumber: profile.PhoneNumber, LineName: profile.Operator, SIMKind: simKind, EID: eSIMEID})
-				if publishError != nil {
-					logger.Warn("encrypted SIM profile synchronization failed", "slot_key", deviceIdentity.SlotKey, "slot_index", deviceIdentity.SlotIndex, "subscriber_number_provisioned", profile.PhoneNumber != "", "operator_available", profile.Operator != "", "error", publishError)
+			}
+			if readError == nil || eSIMSupported {
+				if profile.PhoneNumber == "" && profile.Operator == "" && !eSIMSupported {
+					logger.Warn("SIM profile is empty", "slot_key", deviceIdentity.SlotKey, "slot_index", deviceIdentity.SlotIndex, "subscriber_number_provisioned", false, "operator_available", false)
 				} else {
-					logger.Info("encrypted SIM profile synchronized", "slot_key", deviceIdentity.SlotKey, "slot_index", deviceIdentity.SlotIndex, "sim_kind", simKind, "subscriber_number_provisioned", profile.PhoneNumber != "", "operator_available", profile.Operator != "")
+					simKind := "physical"
+					if eSIMSupported {
+						simKind = "eSIM"
+					}
+					publishError := publisher.PublishSIMProfile(ctx, messageevent.SIMProfile{PhoneNumber: profile.PhoneNumber, LineName: profile.Operator, SIMKind: simKind, EID: eSIMEID})
+					if publishError != nil {
+						logger.Warn("encrypted SIM profile synchronization failed", "slot_key", deviceIdentity.SlotKey, "slot_index", deviceIdentity.SlotIndex, "subscriber_number_provisioned", profile.PhoneNumber != "", "operator_available", profile.Operator != "", "error", publishError)
+					} else {
+						logger.Info("encrypted SIM profile synchronized", "slot_key", deviceIdentity.SlotKey, "slot_index", deviceIdentity.SlotIndex, "sim_kind", simKind, "subscriber_number_provisioned", profile.PhoneNumber != "", "operator_available", profile.Operator != "")
+					}
 				}
 			}
 		}

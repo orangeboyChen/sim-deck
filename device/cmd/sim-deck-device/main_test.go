@@ -25,6 +25,7 @@ import (
 	"sim-deck-device/internal/command"
 	"sim-deck-device/internal/identity"
 	"sim-deck-device/internal/incomingcall"
+	"sim-deck-device/internal/messageevent"
 	"sim-deck-device/internal/modem"
 	"sim-deck-device/internal/serverapi"
 	"sim-deck-device/internal/slotpolicy"
@@ -116,6 +117,8 @@ type fakeDeviceSession struct {
 	clearCallsError error
 	clearCallsCount int
 	readSIMICCID    func(context.Context) (string, error)
+	readEUICC       func(context.Context) (string, error)
+	readSIMProfile  func(context.Context) (modem.SIMProfile, error)
 	retryError      error
 	retryMessage    *sms.ReceivedMessage
 	sink            modem.MessageSink
@@ -131,6 +134,20 @@ func (session *fakeDeviceSession) ReadSIMICCID(ctx context.Context) (string, err
 		return session.readSIMICCID(ctx)
 	}
 	return "", errors.New("no SIM fixture")
+}
+
+func (session *fakeDeviceSession) ReadEUICCIdentifier(ctx context.Context) (string, error) {
+	if session.readEUICC != nil {
+		return session.readEUICC(ctx)
+	}
+	return "", modem.ErrEUICCUnsupported
+}
+
+func (session *fakeDeviceSession) ReadSIMProfile(ctx context.Context) (modem.SIMProfile, error) {
+	if session.readSIMProfile != nil {
+		return session.readSIMProfile(ctx)
+	}
+	return modem.SIMProfile{}, errors.New("SIM profile unavailable")
 }
 
 func (session *fakeDeviceSession) ReadSIMSlotStatus(context.Context) ([]modem.SIMSlotStatus, error) {
@@ -172,6 +189,7 @@ type fakeCallMediaRuntime struct {
 type fakeMessageEventPublisher struct {
 	err      error
 	messages []sms.ReceivedMessage
+	profiles []messageevent.SIMProfile
 }
 
 type fakeSlotPolicy struct {
@@ -200,6 +218,11 @@ func (policy *fakeSlotPolicy) RestartModem(context.Context) error { return nil }
 
 func (publisher *fakeMessageEventPublisher) Publish(_ context.Context, message sms.ReceivedMessage) error {
 	publisher.messages = append(publisher.messages, message)
+	return publisher.err
+}
+
+func (publisher *fakeMessageEventPublisher) PublishSIMProfile(_ context.Context, profile messageevent.SIMProfile) error {
+	publisher.profiles = append(publisher.profiles, profile)
 	return publisher.err
 }
 
@@ -775,6 +798,45 @@ var _ = Describe("Device command runtime", func() {
 		Expect(reloaded.SlotID).To(Equal(synchronizedSlotID))
 		Expect(reloaded.SIMID).To(Equal(synchronizedSIMID))
 		Expect(reloaded.SIMFingerprint).To(HaveLen(64))
+	})
+
+	It("publishes eSIM identity when the active profile cannot be read", func() {
+		transport := newBlockingTransport()
+		const eid = "89086030202200000026000455069085"
+		session := &fakeDeviceSession{
+			readEUICC: func(context.Context) (string, error) { return eid, nil },
+			readSIMProfile: func(context.Context) (modem.SIMProfile, error) {
+				return modem.SIMProfile{}, errors.New("no active eSIM profile")
+			},
+		}
+		dependencies := testDependencies(transport, session)
+		dependencies.bindIdentity = func(_ context.Context, config agent.Config, store identity.Store, state identity.State) (identity.State, error) {
+			prepared, err := store.PrepareDiscovery(state)
+			if err != nil {
+				return identity.State{}, err
+			}
+			return store.BindAssignment(
+				prepared,
+				config.ServerURL,
+				2,
+				"01900000-0000-7000-8000-000000000002",
+				"01900000-0000-7000-8000-000000000003",
+				config.SlotKey,
+				config.SlotIndex,
+			)
+		}
+		publisher := &fakeMessageEventPublisher{}
+		dependencies.newMessageEvents = func(agent.Config, identity.State) (messageEventPublisher, error) {
+			return publisher, nil
+		}
+		dependencies.newCommands = func(agent.Config, identity.State, command.Calls, command.Dependencies) (commandRuntime, error) {
+			return &fakeCommandRuntime{runError: errors.New("stop after eSIM profile synchronization")}, nil
+		}
+
+		err := runDevice(context.Background(), testConfig(GinkgoT().TempDir()), logger, &atomic.Bool{}, dependencies)
+
+		Expect(err).To(MatchError("stop after eSIM profile synchronization"))
+		Expect(publisher.profiles).To(Equal([]messageevent.SIMProfile{{SIMKind: "eSIM", EID: eid}}))
 	})
 
 	It("stops before readiness when initial SIM synchronization fails", func() {
