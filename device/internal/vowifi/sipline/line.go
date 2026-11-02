@@ -13,6 +13,7 @@ import (
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 
+	devicemedia "sim-deck-device/internal/media"
 	"sim-deck-device/internal/vowifi/sipmedia"
 )
 
@@ -151,10 +152,33 @@ type Call struct {
 
 func (call *Call) Number() string        { return call.number }
 func (call *Call) Done() <-chan struct{} { return call.done }
-func (call *Call) PCM() *sipmedia.Duplex {
+func (call *Call) PCM() devicemedia.DuplexPCM {
 	call.mu.Lock()
 	defer call.mu.Unlock()
 	return call.media
+}
+
+// SendDTMF sends one telephone event over the established SIP media session.
+func (call *Call) SendDTMF(digit rune) error {
+	if digit != '*' && digit != '#' && (digit < '0' || digit > '9') {
+		return errors.New("DTMF digit must be 0-9, star, or hash")
+	}
+	call.mu.Lock()
+	defer call.mu.Unlock()
+	if call.media == nil {
+		return errors.New("SIP call media is not active")
+	}
+	var dialog *diago.DialogMedia
+	if call.incoming != nil {
+		dialog = &call.incoming.DialogMedia
+	} else {
+		dialog = &call.outgoing.DialogMedia
+	}
+	writer, err := dialog.AudioWriterDTMF()
+	if err != nil {
+		return fmt.Errorf("open SIP DTMF writer: %w", err)
+	}
+	return writer.WriteDTMF(digit)
 }
 
 // Answer accepts an incoming SIP call and makes its PCM stream available.
