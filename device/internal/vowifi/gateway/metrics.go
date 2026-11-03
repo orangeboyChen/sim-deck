@@ -58,7 +58,7 @@ func (metrics *Metrics) Status() string {
 	return "not_checked"
 }
 
-// Invalidate prevents a prior eSIM profile's registration from authorizing
+// Invalidate prevents a prior SIM identity's registration from authorizing
 // calls until the companion reports a down transition and a fresh registration.
 func (metrics *Metrics) Invalidate() {
 	metrics.mu.Lock()

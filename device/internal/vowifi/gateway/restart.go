@@ -9,7 +9,7 @@ import (
 )
 
 // RequestRestart atomically signals the companion to rebuild the carrier IMS
-// line after an eSIM profile switch without exposing the ICCID in the marker.
+// line after a SIM identity or eSIM profile change without exposing the ICCID.
 func RequestRestart(stateDirectory string) error {
 	var generation [16]byte
 	if _, err := rand.Read(generation[:]); err != nil {

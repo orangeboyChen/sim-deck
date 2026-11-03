@@ -25,9 +25,9 @@ path. “Check Again” asks the device to scrape the companion's local metrics.
 `ims_registered` means the four carrier conditions above were observed for the
 same line; it is not proof of a successful call or audio on that carrier.
 `ims_transport_unavailable` means IMS may be registered but its IPsec or Gm
-path is not currently usable. `ims_reconnecting` means a changed eSIM profile
-has not yet shown a fresh registration. `backend_unavailable` means the
-companion could not be queried.
+path is not currently usable. `ims_reconnecting` means a changed SIM identity
+or eSIM profile has not yet shown a fresh registration. `backend_unavailable`
+means the companion could not be queried.
 
 Without an IMS companion, “Check Again” performs a limited diagnostic. The
 device reads the active SIM's IMSI over its serialized AT connection, derives
