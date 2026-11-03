@@ -27,11 +27,14 @@ func (commander *testCommander) Send(_ context.Context, command string) (at.Resp
 }
 
 type testLine struct {
-	incoming   chan SIPCall
-	dialed     chan string
-	answer     chan SIPCall
-	registered bool
-	stop       chan error
+	incoming     chan SIPCall
+	dialed       chan string
+	answer       chan SIPCall
+	dialContext  chan context.Context
+	progress     chan func(int)
+	ignoreCancel bool
+	registered   bool
+	stop         chan error
 }
 
 func (line *testLine) Run(ctx context.Context) error {
@@ -45,8 +48,17 @@ func (line *testLine) Run(ctx context.Context) error {
 func (line *testLine) Registered() bool              { return line.registered }
 func (line *testLine) IncomingCalls() <-chan SIPCall { return line.incoming }
 func (line *testLine) Close() error                  { return nil }
-func (line *testLine) DialCall(ctx context.Context, number string, _ func(int)) (SIPCall, error) {
+func (line *testLine) DialCall(ctx context.Context, number string, progress func(int)) (SIPCall, error) {
 	line.dialed <- number
+	if line.dialContext != nil {
+		line.dialContext <- ctx
+	}
+	if line.progress != nil {
+		line.progress <- progress
+	}
+	if line.ignoreCancel {
+		return <-line.answer, nil
+	}
 	select {
 	case dialog := <-line.answer:
 		return dialog, nil
@@ -226,6 +238,54 @@ func TestCanceledWiFiDialUnblocksMedia(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("pending PCM remained blocked after hangup")
+	}
+}
+
+func TestFinishedWiFiCallCancelsDialContext(t *testing.T) {
+	controller, line, _, _ := setupRoute(t, true)
+	line.dialContext = make(chan context.Context, 1)
+	if err := controller.Dial(context.Background(), "1234"); err != nil {
+		t.Fatal(err)
+	}
+	<-line.dialed
+	dialContext := <-line.dialContext
+	dialog := newTestCall("1234")
+	line.answer <- dialog
+	waitState(t, controller.Events(), call.StateActive)
+	if err := dialog.Hangup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, controller.Events(), call.StateEnded)
+	select {
+	case <-dialContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("finished SIP call retained its dial context")
+	}
+}
+
+func TestLateSIPResponseCannotReviveEndedCall(t *testing.T) {
+	controller, line, _, _ := setupRoute(t, true)
+	line.ignoreCancel = true
+	line.progress = make(chan func(int), 1)
+	if err := controller.Dial(context.Background(), "1234"); err != nil {
+		t.Fatal(err)
+	}
+	<-line.dialed
+	progress := <-line.progress
+	if err := controller.Hangup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, controller.Events(), call.StateEnded)
+	dialog := newTestCall("1234")
+	line.answer <- dialog
+	select {
+	case <-dialog.Done():
+	case <-time.After(time.Second):
+		t.Fatal("late SIP dialog was not closed")
+	}
+	progress(180)
+	if state := controller.State(); state != call.StateEnded {
+		t.Fatalf("late SIP response revived call state: %s", state)
 	}
 }
 

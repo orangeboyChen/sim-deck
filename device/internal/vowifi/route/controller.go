@@ -54,6 +54,12 @@ func (session *session) resolve(call SIPCall, err error) {
 	})
 }
 
+func (session *session) currentCall() SIPCall {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.call
+}
+
 func (session *session) endpoint(ctx context.Context, closed <-chan struct{}) (media.DuplexPCM, error) {
 	select {
 	case <-session.ready:
@@ -85,6 +91,7 @@ type Controller struct {
 	retryDelay time.Duration
 
 	mu          sync.RWMutex
+	dispatchMu  sync.Mutex
 	active      *session
 	lastSIP     bool
 	snapshot    call.Snapshot
@@ -138,13 +145,22 @@ func (controller *Controller) Snapshot() call.Snapshot {
 
 func (controller *Controller) State() call.State { return controller.Snapshot().State }
 
-func (controller *Controller) publish(snapshot call.Snapshot) {
+func (controller *Controller) publishFor(item *session, snapshot call.Snapshot, cellular bool) {
+	controller.dispatchMu.Lock()
+	defer controller.dispatchMu.Unlock()
 	controller.mu.Lock()
+	if controller.active != item {
+		controller.mu.Unlock()
+		return
+	}
 	if controller.snapshot == snapshot {
 		controller.mu.Unlock()
 		return
 	}
 	controller.snapshot = snapshot
+	if cellular {
+		controller.lastSIP = false
+	}
 	subscribers := append([]chan call.Snapshot(nil), controller.subscribers...)
 	controller.mu.Unlock()
 	controller.events <- snapshot
@@ -212,10 +228,7 @@ func (controller *Controller) Run(ctx context.Context) error {
 			busy := controller.active != nil
 			controller.mu.RUnlock()
 			if !busy {
-				controller.mu.Lock()
-				controller.lastSIP = false
-				controller.mu.Unlock()
-				controller.publish(snapshot)
+				controller.publishFor(nil, snapshot, true)
 			} else if snapshot.State == call.StateRinging || snapshot.State == call.StateWaiting {
 				_ = controller.cellular.Reject(ctx)
 			}
@@ -231,7 +244,7 @@ func (controller *Controller) Run(ctx context.Context) error {
 			controller.active = item
 			controller.lastSIP = true
 			controller.mu.Unlock()
-			controller.publish(call.Snapshot{State: call.StateRinging, IncomingNumber: incoming.Number()})
+			controller.publishFor(item, call.Snapshot{State: call.StateRinging, IncomingNumber: incoming.Number()}, false)
 			go controller.watch(item, incoming)
 		}
 	}
@@ -286,11 +299,11 @@ func (controller *Controller) Dial(ctx context.Context, number string) error {
 	controller.active = item
 	controller.lastSIP = true
 	controller.mu.Unlock()
-	controller.publish(call.Snapshot{State: call.StateDialing})
+	controller.publishFor(item, call.Snapshot{State: call.StateDialing}, false)
 	go func() {
 		dialog, err := line.DialCall(dialContext, number, func(status int) {
 			if status == 180 || status == 183 {
-				controller.publish(call.Snapshot{State: call.StateDialing})
+				controller.publishFor(item, call.Snapshot{State: call.StateDialing}, false)
 			}
 		})
 		if err != nil {
@@ -306,7 +319,7 @@ func (controller *Controller) Dial(ctx context.Context, number string) error {
 			return
 		}
 		item.resolve(dialog, nil)
-		controller.publish(call.Snapshot{State: call.StateActive, Active: true})
+		controller.publishFor(item, call.Snapshot{State: call.StateActive, Active: true}, false)
 		controller.watch(item, dialog)
 	}()
 	return nil
@@ -329,6 +342,9 @@ func (controller *Controller) watch(item *session, dialog SIPCall) {
 
 func (controller *Controller) finish(item *session) {
 	item.resolve(nil, io.ErrClosedPipe)
+	if item.cancel != nil {
+		item.cancel()
+	}
 	controller.mu.Lock()
 	if controller.active != item {
 		controller.mu.Unlock()
@@ -336,7 +352,7 @@ func (controller *Controller) finish(item *session) {
 	}
 	controller.active = nil
 	controller.mu.Unlock()
-	controller.publish(call.Snapshot{State: call.StateEnded})
+	controller.publishFor(nil, call.Snapshot{State: call.StateEnded}, false)
 }
 
 func (controller *Controller) current() *session {
@@ -353,15 +369,16 @@ func (controller *Controller) Answer(ctx context.Context) error {
 		}
 		return controller.cellular.Answer(ctx)
 	}
-	if item.call == nil {
+	dialog := item.currentCall()
+	if dialog == nil {
 		return errors.New("outgoing Wi-Fi Calling call cannot be answered locally")
 	}
-	if err := item.call.Answer(); err != nil {
+	if err := dialog.Answer(); err != nil {
 		controller.finish(item)
 		return err
 	}
-	item.resolve(item.call, nil)
-	controller.publish(call.Snapshot{State: call.StateActive, Active: true})
+	item.resolve(dialog, nil)
+	controller.publishFor(item, call.Snapshot{State: call.StateActive, Active: true}, false)
 	return nil
 }
 
@@ -407,8 +424,8 @@ func (controller *Controller) endActive(ctx context.Context) error {
 		item.cancel()
 	}
 	var err error
-	if item.call != nil {
-		err = item.call.Hangup(ctx)
+	if dialog := item.currentCall(); dialog != nil {
+		err = dialog.Hangup(ctx)
 	}
 	controller.finish(item)
 	return err
@@ -472,10 +489,11 @@ func (controller *Controller) SendDTMF(ctx context.Context, digit string) error 
 	if item == nil {
 		return controller.cellular.SendDTMF(ctx, digit)
 	}
-	if len(digit) != 1 || item.call == nil || controller.State() != call.StateActive {
+	dialog := item.currentCall()
+	if len(digit) != 1 || dialog == nil || controller.State() != call.StateActive {
 		return errors.New("Wi-Fi Calling call is not active")
 	}
-	return item.call.SendDTMF(rune(digit[0]))
+	return dialog.SendDTMF(rune(digit[0]))
 }
 
 // OpenPCM returns the selected call's PCM endpoint. A SIP endpoint waits for
