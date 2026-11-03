@@ -8,6 +8,7 @@ import (
 	"time"
 
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
+	"github.com/google/uuid"
 )
 
 type memoryStore struct {
@@ -148,6 +149,26 @@ func TestUserMetadataIsStable(t *testing.T) {
 	}
 	if user.WebAuthnCredentials() != nil {
 		t.Fatalf("expected empty credentials to remain nil")
+	}
+}
+
+func TestDiscoverableUserHandlerUsesUserHandleInsteadOfCredentialID(t *testing.T) {
+	store := &memoryStore{owner: "01900000-0000-7000-8000-000000000001"}
+	service, err := New(store, "https://relay.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := uuid.MustParse(store.owner)
+	handler := service.discoverableUserHandler(context.Background(), store.owner)
+	user, err := handler([]byte("credential-id-not-a-uuid"), owner[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(user.WebAuthnID()) != string(owner[:]) {
+		t.Fatalf("unexpected passkey owner %q", user.WebAuthnID())
+	}
+	if _, err := handler(owner[:], []byte("wrong-user-handle")); err == nil {
+		t.Fatal("expected a mismatched user handle to be rejected")
 	}
 }
 

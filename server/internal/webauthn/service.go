@@ -151,14 +151,24 @@ func (service *Service) FinishLogin(ctx context.Context, ceremonyID string, requ
 	if err != nil {
 		return "", err
 	}
-	_, _, err = service.rp.FinishPasskeyLogin(func(rawID, _ []byte) (webauthn.User, error) {
-		parsed, parseErr := uuid.FromBytes(rawID)
-		if parseErr != nil || parsed.String() != ownerID {
+	_, credential, err := service.rp.FinishPasskeyLogin(service.discoverableUserHandler(ctx, ownerID), session, request)
+	if err != nil {
+		return "", err
+	}
+	if err := service.store.SaveWebAuthnCredential(ctx, ownerID, *credential); err != nil {
+		return "", err
+	}
+	return ownerID, nil
+}
+
+func (service *Service) discoverableUserHandler(ctx context.Context, ownerID string) webauthn.DiscoverableUserHandler {
+	return func(_ []byte, userHandle []byte) (webauthn.User, error) {
+		parsed, err := uuid.FromBytes(userHandle)
+		if err != nil || parsed.String() != ownerID {
 			return nil, errors.New("unknown passkey owner")
 		}
 		return service.user(ctx, ownerID)
-	}, session, request)
-	return ownerID, err
+	}
 }
 
 func (service *Service) saveSession(session *webauthn.SessionData, response any) (string, json.RawMessage, error) {
