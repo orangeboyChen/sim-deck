@@ -4,11 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http/httptest"
 	"strings"
 	"time"
 
@@ -33,6 +38,29 @@ func newTestSession(sink MessageSink) (*Session, net.Conn, *at.Client) {
 }
 
 var _ = Describe("Modem session", func() {
+	It("trusts the pinned GSMA RSP2 root without accepting unrelated TLS certificates", func() {
+		block, rest := pem.Decode(gsmaRSP2Root)
+		Expect(block).NotTo(BeNil())
+		Expect(rest).To(BeEmpty())
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(certificate.IsCA).To(BeTrue())
+		Expect(certificate.Subject.CommonName).To(Equal("GSM Association - RSP2 Root CI1"))
+		fingerprint := sha256.Sum256(certificate.Raw)
+		Expect(hex.EncodeToString(fingerprint[:])).To(Equal("5e3e91fd454327c3af5d32a7a73bbc59fe43aa7d85fd32d5db44423f80a56bb3"))
+
+		client, err := esimHTTPClient()
+		Expect(err).NotTo(HaveOccurred())
+		untrusted := httptest.NewTLSServer(nil)
+		DeferCleanup(untrusted.Close)
+		response, err := client.Get(untrusted.URL)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		var unknownAuthority x509.UnknownAuthorityError
+		Expect(errors.As(err, &unknownAuthority)).To(BeTrue())
+	})
+
 	It("reads the EC20CE model and revision using standard read-only commands", func() {
 		clientTransport, modemTransport := net.Pipe()
 		client := at.NewClient(clientTransport)
