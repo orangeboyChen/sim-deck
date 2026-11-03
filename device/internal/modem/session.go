@@ -321,12 +321,12 @@ func (session *Session) DownloadESIMProfile(ctx context.Context, activationCode 
 	if !response.OK() {
 		return fmt.Errorf("QESIM download rejected: %s", response.Terminal)
 	}
-	transaction, result, err := parseQESIMTransaction(response.Lines)
+	transaction, downloadResult, _, err := session.readQESIMResult(ctx, response.Lines)
 	if err != nil {
 		return err
 	}
-	if result != 0 {
-		return fmt.Errorf("QESIM download failed with result %d", result)
+	if downloadResult != nil {
+		return fmt.Errorf("QESIM download failed with result %d", *downloadResult)
 	}
 	for {
 		httpResponse, err := postESIMTransaction(ctx, transaction.URL, transaction.Payload, smdpHost)
@@ -589,25 +589,30 @@ func (session *Session) readQESIMResult(ctx context.Context, lines []string) (*e
 			return nil, nil, false, ctx.Err()
 		case <-timer.C:
 			return nil, nil, false, errors.New("timed out waiting for QESIM transaction result")
-		case urc := <-session.client.URCs():
-			if !strings.HasPrefix(strings.TrimSpace(urc), "+QESIM:") {
-				continue
+		case line := <-session.client.QESIMResults():
+			if next, result, found, err := parseQESIMResultLines([]string{line}); found || err != nil {
+				return next, result, found, err
 			}
-			return parseQESIMResultLines([]string{urc})
 		}
 	}
 }
 
 func parseQESIMResultLines(lines []string) (*esimTransaction, *int, bool, error) {
-	if next, result, err := parseQESIMTransaction(lines); err == nil {
-		if result != 0 {
-			return nil, &result, true, nil
-		}
-		return next, nil, true, nil
-	} else if result != 0 {
-		return nil, &result, true, nil
-	}
 	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, `+QESIM: "trans"`) {
+			next, result, err := parseQESIMTransaction([]string{line})
+			if err != nil {
+				return nil, nil, false, err
+			}
+			if result != 0 {
+				return nil, &result, true, nil
+			}
+			if next != nil {
+				return next, nil, true, nil
+			}
+			continue
+		}
 		if !strings.HasPrefix(strings.TrimSpace(line), "+QESIM: \"download\", ") {
 			continue
 		}

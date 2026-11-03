@@ -38,6 +38,21 @@ func (transport *writeFailureTransport) Close() error {
 }
 
 var _ = Describe("AT client", func() {
+	It("keeps asynchronous QESIM results out of unrelated command responses", func() {
+		clientTransport, modemTransport := net.Pipe()
+		client := NewClient(clientTransport)
+		DeferCleanup(func() { _ = client.Close(); _ = modemTransport.Close() })
+		go func() {
+			_, _ = bufio.NewReader(modemTransport).ReadString('\r')
+			_, _ = modemTransport.Write([]byte("+QESIM: \"download\",0\r\nOK\r\n"))
+		}()
+
+		response, err := client.Send(context.Background(), "AT")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Lines).To(BeEmpty())
+		Eventually(client.QESIMResults()).Should(Receive(Equal(`+QESIM: "download",0`)))
+	})
+
 	It("separates unsolicited notifications from a command response", func() {
 		clientTransport, modemTransport := net.Pipe()
 		client := NewClient(clientTransport)

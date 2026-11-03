@@ -168,6 +168,45 @@ var _ = Describe("Modem session", func() {
 		Expect(transaction.Payload).To(Equal(`{"euiccChallenge":"abc","smdpAddress":"example.test"}`))
 	})
 
+	It("waits past a QESIM block acknowledgment for the next transaction", func() {
+		next, result, found, err := parseQESIMResultLines([]string{
+			`+QESIM: "trans",0`,
+			`+QESIM: "trans",0,"/next",2,"{}"`,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(result).To(BeNil())
+		Expect(next).To(Equal(&esimTransaction{URL: "/next", Payload: "{}"}))
+
+		_, _, found, err = parseQESIMResultLines([]string{`+QESIM: "trans",0`})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeFalse())
+	})
+
+	It("receives a delayed QESIM transaction while the notification loop is running", func() {
+		session, modemTransport, client := newTestSession(MessageSinkFunc(func(context.Context, sms.ReceivedMessage) error { return nil }))
+		DeferCleanup(func() { _ = client.Close(); _ = modemTransport.Close() })
+		runContext, cancelRun := context.WithCancel(context.Background())
+		DeferCleanup(cancelRun)
+		go func() { _ = session.Run(runContext) }()
+		go func() {
+			reader := bufio.NewReader(modemTransport)
+			command, _ := reader.ReadString('\r')
+			Expect(command).To(HavePrefix(`AT+QESIM="trans",`))
+			_, _ = modemTransport.Write([]byte("+QESIM: \"trans\",0\r\nOK\r\n"))
+			command, _ = reader.ReadString('\r')
+			Expect(command).To(Equal("AT\r"))
+			_, _ = modemTransport.Write([]byte("OK\r\n+QESIM: \"trans\",0,\"/next\",2,\"{}\"\r\n"))
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		next, result, err := session.forwardESIMHTTPResponse(ctx, []byte("HTTP/1.1 200 OK\r\n\r\n{}"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(BeNil())
+		Expect(next).To(Equal(&esimTransaction{URL: "/next", Payload: "{}"}))
+	})
+
 	It("reads an eUICC EID through the read-only CSIM path", func() {
 		session, modemTransport, client := newTestSession(MessageSinkFunc(func(context.Context, sms.ReceivedMessage) error { return nil }))
 		DeferCleanup(func() { _ = client.Close(); _ = modemTransport.Close() })
@@ -461,7 +500,7 @@ var _ = Describe("Modem session", func() {
 					_, _ = modemTransport.Write([]byte("+CPIN: READY\r\nOK\r\n"))
 				case operatorSelectionQuery + "\r":
 					_, _ = modemTransport.Write([]byte("+COPS: 0,0,\"CHINA MOBILE\",7\r\nOK\r\n"))
-			case "AT+CCWA=1\r":
+				case "AT+CCWA=1\r":
 					_, _ = modemTransport.Write([]byte("+CME ERROR: no network service\r\n"))
 				case "AT+CMGL=4\r":
 					_, _ = modemTransport.Write([]byte("+CMGL: 1,0,,23\r\n" + testDeliverPDU + "\r\n+CMGL: 2,0,,1\r\nnot-hex\r\nOK\r\n"))

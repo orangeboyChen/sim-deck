@@ -35,6 +35,7 @@ type commandResult struct {
 type pendingCommand struct {
 	lines          []string
 	result         chan commandResult
+	qesim          bool
 	prompt         chan struct{}
 	expectsPrompt  bool
 	expectsConnect bool
@@ -48,6 +49,7 @@ type Client struct {
 	state     sync.Mutex
 	pending   *pendingCommand
 	urcs      chan string
+	qesim     chan string
 	errors    chan error
 	idle      chan struct{}
 	done      chan struct{}
@@ -59,6 +61,7 @@ func NewClient(transport io.ReadWriteCloser) *Client {
 	client := &Client{
 		transport: transport,
 		urcs:      make(chan string, 128),
+		qesim:     make(chan string, 128),
 		errors:    make(chan error, 1),
 		idle:      make(chan struct{}, 1),
 		done:      make(chan struct{}),
@@ -71,6 +74,11 @@ func NewClient(transport io.ReadWriteCloser) *Client {
 // URCs returns unsolicited modem notifications such as incoming calls and messages.
 func (client *Client) URCs() <-chan string {
 	return client.urcs
+}
+
+// QESIMResults returns asynchronous eSIM download results separately from other modem notifications.
+func (client *Client) QESIMResults() <-chan string {
+	return client.qesim
 }
 
 // Errors reports the terminal serial read failure that made the client unusable.
@@ -102,7 +110,7 @@ func (client *Client) Send(ctx context.Context, command string) (Response, error
 	case <-client.idle:
 	}
 
-	pending := &pendingCommand{result: make(chan commandResult, 1)}
+	pending := &pendingCommand{result: make(chan commandResult, 1), qesim: strings.HasPrefix(command, "AT+QESIM=")}
 	client.state.Lock()
 	client.pending = pending
 	client.state.Unlock()
@@ -321,6 +329,21 @@ func (client *Client) readLoop() {
 }
 
 func (client *Client) routeLine(line string) error {
+	if strings.HasPrefix(line, "+QESIM:") {
+		client.state.Lock()
+		if client.pending != nil && client.pending.qesim {
+			client.pending.lines = append(client.pending.lines, line)
+			client.state.Unlock()
+			return nil
+		}
+		client.state.Unlock()
+		select {
+		case client.qesim <- line:
+			return nil
+		default:
+			return ErrURCOverflow
+		}
+	}
 	if isURC(line) {
 		return client.deliverURC(line)
 	}
