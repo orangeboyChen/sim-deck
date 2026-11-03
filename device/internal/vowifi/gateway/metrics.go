@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -24,10 +25,12 @@ const gmMetric = "gsm_sip_bridge_vowifi_gm_connection_up"
 // Metrics reads the companion's IMS, IPsec, and Gm state. The local SIP
 // registration alone is not evidence that Wi-Fi Calling works.
 type Metrics struct {
+	mu        sync.Mutex
 	url       string
 	client    *http.Client
 	ready     atomic.Bool
 	awaitDown atomic.Bool
+	status    atomic.Value
 }
 
 func NewMetrics(rawURL string) (*Metrics, error) {
@@ -47,16 +50,30 @@ func NewMetrics(rawURL string) (*Metrics, error) {
 
 func (metrics *Metrics) Ready() bool { return metrics.ready.Load() }
 
+// Status returns the latest carrier observation without performing network I/O.
+func (metrics *Metrics) Status() string {
+	if value := metrics.status.Load(); value != nil {
+		return value.(string)
+	}
+	return "not_checked"
+}
+
 // Invalidate prevents a prior eSIM profile's registration from authorizing
 // calls until the companion reports a down transition and a fresh registration.
 func (metrics *Metrics) Invalidate() {
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
 	metrics.ready.Store(false)
 	metrics.awaitDown.Store(true)
+	metrics.status.Store("ims_reconnecting")
 }
 
 // Probe updates readiness only when the carrier IMS registration, ePDG
 // transport, IPsec CHILD_SA, and Gm connection belong to one companion line.
-func (metrics *Metrics) Probe(ctx context.Context) (string, error) {
+func (metrics *Metrics) Probe(ctx context.Context) (status string, probeError error) {
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+	defer func() { metrics.status.Store(status) }()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metrics.url, nil)
 	if err != nil {
 		metrics.ready.Store(false)
@@ -157,6 +174,7 @@ func (metrics *Metrics) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			metrics.ready.Store(false)
+			metrics.status.Store("backend_unavailable")
 			return ctx.Err()
 		case <-ticker.C:
 			_, _ = metrics.Probe(ctx)

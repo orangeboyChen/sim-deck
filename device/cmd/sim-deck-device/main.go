@@ -558,6 +558,9 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 		}); ok {
 			probe.SetWiFiCallingProbe(wifiMetrics.Probe)
 		}
+		if status, ok := policy.(interface{ SetWiFiCallingStatusProvider(func() string) }); ok {
+			status.SetWiFiCallingStatusProvider(wifiMetrics.Status)
+		}
 		if changes, ok := policy.(interface{ SetProfileChanged(func(string)) }); ok {
 			changes.SetProfileChanged(func(string) {
 				wifiMetrics.Invalidate()

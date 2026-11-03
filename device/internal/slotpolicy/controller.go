@@ -56,6 +56,7 @@ type Controller struct {
 	lookupIP           func(context.Context, string) ([]net.IPAddr, error)
 	wifiCallingBackend bool
 	wifiCallingProbe   func(context.Context) (string, error)
+	wifiCallingStatus  func() string
 	profileChanged     func(string)
 }
 
@@ -64,6 +65,14 @@ func (controller *Controller) SetWiFiCallingProbe(probe func(context.Context) (s
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
 	controller.wifiCallingProbe = probe
+}
+
+// SetWiFiCallingStatusProvider supplies the companion's latest cached status
+// for radio updates without polling the companion from the policy read path.
+func (controller *Controller) SetWiFiCallingStatusProvider(status func() string) {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	controller.wifiCallingStatus = status
 }
 
 // SetProfileChanged installs a callback that invalidates the previous
@@ -136,7 +145,7 @@ func NewControllerWithWiFiCalling(directory string, commander Commander, timeout
 func (controller *Controller) Current() Settings {
 	controller.mu.RLock()
 	defer controller.mu.RUnlock()
-	return controller.settings
+	return controller.withLiveWiFiCallingStatus(controller.settings)
 }
 
 // Profile returns stored preferences without applying an inactive profile to the modem.
@@ -144,10 +153,20 @@ func (controller *Controller) Profile(profileID string) Settings {
 	controller.mu.RLock()
 	defer controller.mu.RUnlock()
 	if settings, ok := controller.profiles[profileID]; ok {
+		if profileID == controller.activeProfileID {
+			return controller.withLiveWiFiCallingStatus(settings)
+		}
 		return settings
 	}
 	settings := defaultSettings()
 	settings.WiFiCallingAvailable = controller.wifiCallingBackend
+	return settings
+}
+
+func (controller *Controller) withLiveWiFiCallingStatus(settings Settings) Settings {
+	if controller.wifiCallingBackend && controller.wifiCallingStatus != nil {
+		settings.WiFiCallingStatus = controller.wifiCallingStatus()
+	}
 	return settings
 }
 

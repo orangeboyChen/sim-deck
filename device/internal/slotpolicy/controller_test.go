@@ -110,6 +110,23 @@ var _ = Describe("Slot policy controller", func() {
 		Expect(settings.WiFiCallingStatus).To(Equal("backend_unavailable"))
 	})
 
+	It("reports the latest IMS status for the active profile without changing saved preferences", func() {
+		controller, err := NewControllerWithWiFiCalling(directory, commander, time.Second, true)
+		Expect(err).NotTo(HaveOccurred())
+		profileID := "89000000000000000001"
+		Expect(controller.SelectProfile(context.Background(), profileID)).To(Succeed())
+		status := "ims_registered"
+		controller.SetWiFiCallingStatusProvider(func() string { return status })
+		Expect(controller.Current().WiFiCallingStatus).To(Equal("ims_registered"))
+		Expect(controller.Profile(profileID).WiFiCallingStatus).To(Equal("ims_registered"))
+		status = "ims_transport_unavailable"
+		Expect(controller.Current().WiFiCallingStatus).To(Equal("ims_transport_unavailable"))
+		Expect(controller.Profile(profileID).WiFiCallingStatus).To(Equal("ims_transport_unavailable"))
+		reloaded, err := NewControllerWithWiFiCalling(directory, commander, time.Second, true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reloaded.Current().WiFiCallingStatus).To(BeEmpty())
+	})
+
 	It("migrates existing slot preferences to the first active eSIM profile", func() {
 		path := filepath.Join(directory, "slot-policy.json")
 		Expect(os.WriteFile(path, []byte(`{"version":1,"data_enabled":false,"incoming_calls_enabled":true,"incoming_sms_enabled":true,"volte_enabled":true}`), 0o600)).To(Succeed())
