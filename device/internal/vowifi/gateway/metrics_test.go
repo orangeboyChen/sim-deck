@@ -4,11 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
 
 func TestMetricsRequiresCarrierRegistrationAndHealthyTransport(t *testing.T) {
 	body := ""
@@ -133,5 +143,50 @@ func TestMetricsAcceptsFreshRegistrationAfterCompanionRestart(t *testing.T) {
 	status, err := metrics.Probe(context.Background())
 	if err != nil || status != "ims_registered" || !metrics.Ready() {
 		t.Fatalf("fresh registration after restart rejected: status=%q ready=%v error=%v", status, metrics.Ready(), err)
+	}
+}
+
+func TestMetricsRunObservesCompanionDowntimeBeforeFreshRegistration(t *testing.T) {
+	body := fmt.Sprintf("%s{module=\"vowifi-0\"} 1\n%s{module=\"vowifi-0\"} 1\n%s{module=\"vowifi-0\"} 1\n%s{module=\"vowifi-0\"} 1\n",
+		registeredMetric, tunnelMetric, childSAMetric, gmMetric)
+	metrics, err := NewMetrics("http://127.0.0.1:9091/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stopped atomic.Bool
+	metrics.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if stopped.Load() {
+			return nil, syscall.ECONNREFUSED
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: request}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() { finished <- metrics.Run(ctx) }()
+	waitFor := func(description string, condition func() bool, timeout time.Duration) {
+		t.Helper()
+		deadline := time.Now().Add(timeout)
+		for !condition() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s: status=%q ready=%v", description, metrics.Status(), metrics.Ready())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitFor("initial registration", metrics.Ready, time.Second)
+	metrics.Invalidate()
+	stopped.Store(true)
+	waitFor("companion downtime", func() bool { return metrics.Status() == "backend_unavailable" }, 3*time.Second)
+	stopped.Store(false)
+	waitFor("fresh registration", metrics.Ready, 3*time.Second)
+	cancel()
+	select {
+	case err := <-finished:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("metrics run stopped with %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("metrics run did not stop after cancellation")
 	}
 }

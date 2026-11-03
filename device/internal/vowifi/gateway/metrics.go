@@ -168,7 +168,9 @@ func (metrics *Metrics) Probe(ctx context.Context) (status string, probeError er
 
 func (metrics *Metrics) Run(ctx context.Context) error {
 	_, _ = metrics.Probe(ctx)
-	ticker := time.NewTicker(5 * time.Second)
+	// The companion pauses for five seconds between processes. Probe more
+	// frequently so a restart cannot hide between two observations.
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
