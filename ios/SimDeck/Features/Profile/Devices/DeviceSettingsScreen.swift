@@ -273,11 +273,15 @@ struct SIMSettingsScreen: View {
 
     private var canSave: Bool {
         guard model.canEditDeviceProfiles, !isWorking, !isProbingWiFiCalling else { return false }
-        let identityChanged = numericID != line.numericID
-            || lineName != line.lineName
-            || phoneNumber != line.phoneNumber
-        let controlsChanged = slotSettings != nil && slotSettings != originalSlotSettings
         return identityChanged || controlsChanged
+    }
+
+    private var identityChanged: Bool {
+        numericID != line.numericID || lineName != line.lineName || phoneNumber != line.phoneNumber
+    }
+
+    private var controlsChanged: Bool {
+        slotSettings != nil && slotSettings != originalSlotSettings
     }
 
     private func slotSettingsBinding(for value: SlotSettings) -> Binding<SlotSettings> {
@@ -342,8 +346,10 @@ struct SIMSettingsScreen: View {
             isWorking = true
             saveErrorDescription = nil
             do {
-                try await model.saveSIM(line: line, numericID: numericID, lineName: lineName, phoneNumber: phoneNumber)
-                if let slotSettings, slotSettings != originalSlotSettings {
+                if identityChanged {
+                    try await model.saveSIM(line: line, numericID: numericID, lineName: lineName, phoneNumber: phoneNumber)
+                }
+                if controlsChanged, let slotSettings {
                     _ = try await model.saveSlotSettings(slotSettings, line: line)
                     if restartModem {
                         try await model.restartSlotModem(line: line)
