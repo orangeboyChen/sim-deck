@@ -289,6 +289,33 @@ func TestLateSIPResponseCannotReviveEndedCall(t *testing.T) {
 	}
 }
 
+func TestFinishedSIPCallPreservesConcurrentCellularCall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cellular := call.NewController(&testCommander{})
+	line := &testLine{incoming: make(chan SIPCall, 1), registered: true}
+	controller, err := New(ctx, cellular, line, func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := &session{ready: make(chan struct{})}
+	controller.active = item
+	controller.lastSIP = true
+	controller.snapshot = call.Snapshot{State: call.StateActive, Active: true}
+	if err := cellular.ApplyCLCC([]string{`+CLCC: 1,0,0,0,0,"10086",129`}); err != nil {
+		t.Fatal(err)
+	}
+
+	controller.finish(item)
+
+	if snapshot := controller.Snapshot(); snapshot.State != call.StateActive || !snapshot.Active {
+		t.Fatalf("cellular call was replaced by stale SIP end: %+v", snapshot)
+	}
+	if controller.lastWasSIP() {
+		t.Fatal("active cellular call remained classified as SIP")
+	}
+}
+
 func TestGatewayFailureDoesNotStopCellularAndReopensLine(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

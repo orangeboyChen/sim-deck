@@ -148,19 +148,23 @@ func (controller *Controller) State() call.State { return controller.Snapshot().
 func (controller *Controller) publishFor(item *session, snapshot call.Snapshot, cellular bool) {
 	controller.dispatchMu.Lock()
 	defer controller.dispatchMu.Unlock()
+	controller.publishForLocked(item, snapshot, cellular)
+}
+
+func (controller *Controller) publishForLocked(item *session, snapshot call.Snapshot, cellular bool) {
 	controller.mu.Lock()
 	if controller.active != item {
 		controller.mu.Unlock()
 		return
+	}
+	if cellular {
+		controller.lastSIP = false
 	}
 	if controller.snapshot == snapshot {
 		controller.mu.Unlock()
 		return
 	}
 	controller.snapshot = snapshot
-	if cellular {
-		controller.lastSIP = false
-	}
 	subscribers := append([]chan call.Snapshot(nil), controller.subscribers...)
 	controller.mu.Unlock()
 	controller.events <- snapshot
@@ -345,6 +349,8 @@ func (controller *Controller) finish(item *session) {
 	if item.cancel != nil {
 		item.cancel()
 	}
+	controller.dispatchMu.Lock()
+	defer controller.dispatchMu.Unlock()
 	controller.mu.Lock()
 	if controller.active != item {
 		controller.mu.Unlock()
@@ -352,7 +358,12 @@ func (controller *Controller) finish(item *session) {
 	}
 	controller.active = nil
 	controller.mu.Unlock()
-	controller.publishFor(nil, call.Snapshot{State: call.StateEnded}, false)
+	snapshot := controller.cellular.Snapshot()
+	if snapshot.State == call.StateIdle || snapshot.State == call.StateEnded {
+		controller.publishForLocked(nil, call.Snapshot{State: call.StateEnded}, false)
+		return
+	}
+	controller.publishForLocked(nil, snapshot, true)
 }
 
 func (controller *Controller) current() *session {
