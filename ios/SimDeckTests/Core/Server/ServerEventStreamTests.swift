@@ -205,6 +205,46 @@ final class ServerEventStreamTests: XCTestCase {
         XCTAssertTrue(current.didClose)
     }
 
+    func testMissingStreamHeartbeatsDoNotWarnWhenServerIsReachable() async {
+        let streamClosed = expectation(description: "stalled stream closed")
+        streamClosed.assertForOverFulfill = false
+        let stream = MonitorEventStream(pages: [], onClose: { streamClosed.fulfill() })
+        let opener = MonitorEventStreamOpener { _ in stream }
+        var qualityChanges: [Bool] = []
+        let monitor = MessageEventMonitor(
+            opener: opener,
+            currentSequence: { 0 },
+            synchronizeThrough: { _ in true },
+            onConnectionQualityChanged: { qualityChanges.append($0) },
+            probeServer: { true },
+            waitBeforeHeartbeatCheck: { try await Task.sleep(for: .milliseconds(10)) }
+        )
+
+        monitor.start()
+        await fulfillment(of: [streamClosed], timeout: 1)
+        monitor.stop()
+
+        XCTAssertFalse(qualityChanges.contains(true))
+    }
+
+    func testMissingStreamHeartbeatsWarnWhenServerIsUnreachable() async {
+        let degraded = expectation(description: "server unreachable warning")
+        let stream = MonitorEventStream(pages: [])
+        let opener = MonitorEventStreamOpener { _ in stream }
+        let monitor = MessageEventMonitor(
+            opener: opener,
+            currentSequence: { 0 },
+            synchronizeThrough: { _ in true },
+            onConnectionQualityChanged: { if $0 { degraded.fulfill() } },
+            probeServer: { false },
+            waitBeforeHeartbeatCheck: { try await Task.sleep(for: .milliseconds(10)) }
+        )
+
+        monitor.start()
+        await fulfillment(of: [degraded], timeout: 1)
+        monitor.stop()
+    }
+
     private func isolatedDefaults() -> UserDefaults {
         let suiteName = "ServerEventStreamTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

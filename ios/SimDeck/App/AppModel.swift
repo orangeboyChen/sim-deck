@@ -183,6 +183,9 @@ final class AppModel {
             },
             onConnectionQualityChanged: { [weak self] degraded in
                 self?.isServerConnectionDegraded = degraded
+            },
+            probeServer: { [weak resolvedServerConnection] in
+                await resolvedServerConnection?.isReachable() ?? false
             }
         )
     }

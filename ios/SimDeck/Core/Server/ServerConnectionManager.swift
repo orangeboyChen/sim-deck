@@ -726,6 +726,18 @@ final class ServerConnectionManager {
     var configuredBaseURL: URL? { try? validatedBaseURL() }
     var accessToken: String? { session?.accessToken }
 
+    func isReachable() async -> Bool {
+        guard let baseURL = configuredBaseURL else { return false }
+        var request = URLRequest(url: baseURL.appending(path: "healthz"))
+        request.timeoutInterval = 5
+        do {
+            let (_, response) = try await network.data(for: request)
+            return (200...299).contains(response.statusCode)
+        } catch {
+            return false
+        }
+    }
+
     func acceptWebPasskeySession(_ webSession: WebPasskeySession) throws {
         try save(ServerSession(
             accessToken: webSession.accessToken,

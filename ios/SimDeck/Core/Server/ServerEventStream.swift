@@ -93,7 +93,7 @@ final class ServerConnectEncryptedEventStream: EncryptedEventStream {
     }
 
     func close() {
-        stream.close()
+        stream.cancel()
     }
 }
 @MainActor
@@ -108,6 +108,7 @@ final class MessageEventMonitor {
     private let synchronizeThrough: (Int64) async -> Bool
     private let onDisconnected: () -> Void
     private let onConnectionQualityChanged: (Bool) -> Void
+    private let probeServer: () async -> Bool
     private let waitBeforeReconnect: () async throws -> Void
     private let waitBeforeHeartbeatCheck: () async throws -> Void
     private var task: Task<Void, Never>?
@@ -126,6 +127,7 @@ final class MessageEventMonitor {
         synchronizeThrough: @escaping (Int64) async -> Bool,
         onDisconnected: @escaping () -> Void = {},
         onConnectionQualityChanged: @escaping (Bool) -> Void = { _ in },
+        probeServer: @escaping () async -> Bool = { false },
         waitBeforeReconnect: @escaping () async throws -> Void = {
             try await Task.sleep(for: .seconds(2))
         },
@@ -138,6 +140,7 @@ final class MessageEventMonitor {
         self.synchronizeThrough = synchronizeThrough
         self.onDisconnected = onDisconnected
         self.onConnectionQualityChanged = onConnectionQualityChanged
+        self.probeServer = probeServer
         self.waitBeforeReconnect = waitBeforeReconnect
         self.waitBeforeHeartbeatCheck = waitBeforeHeartbeatCheck
     }
@@ -258,7 +261,16 @@ final class MessageEventMonitor {
             } else {
                 missedHeartbeats += 1
                 if missedHeartbeats >= 3 {
-                    updateConnectionQuality(degraded: true)
+                    missedHeartbeats = 0
+                    let reachable = await probeServer()
+                    guard streamGeneration == generation, !Task.isCancelled else { return }
+                    Self.logger.warning(
+                        "Encrypted event stream missed three heartbeat checks; server reachable: \(reachable, privacy: .public)"
+                    )
+                    updateConnectionQuality(degraded: !reachable)
+                    if reachable {
+                        activeStream?.close()
+                    }
                 }
             }
         }
