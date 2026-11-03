@@ -42,7 +42,7 @@ final class WebPasskeyAuthorizer: NSObject, WebPasskeyAuthorizing {
             path: "passkey/register",
             parameters: ["access_token": accessToken]
         )
-        let values = callbackValues(from: callback)
+        let values = Self.callbackValues(from: callback)
         guard values["status"] == "success" else {
             throw WebPasskeyAuthorizationError.failed(
                 values["error"] ?? String(localized: "Passkey registration failed.")
@@ -52,12 +52,16 @@ final class WebPasskeyAuthorizer: NSObject, WebPasskeyAuthorizing {
 
     func signIn(baseURL: URL) async throws -> WebPasskeySession {
         let callback = try await open(baseURL: baseURL, path: "passkey/login", parameters: [:])
+        return try Self.session(from: callback)
+    }
+
+    static func session(from callback: URL) throws -> WebPasskeySession {
         let values = callbackValues(from: callback)
         guard values["status"] == "success",
               let accessToken = values["access_token"], !accessToken.isEmpty,
               let refreshToken = values["refresh_token"], !refreshToken.isEmpty,
-              let accessExpiresAt = Self.date(from: values["access_expires_at"]),
-              let refreshExpiresAt = Self.date(from: values["refresh_expires_at"]) else {
+              let accessExpiresAt = date(from: values["access_expires_at"]),
+              let refreshExpiresAt = date(from: values["refresh_expires_at"]) else {
             throw WebPasskeyAuthorizationError.failed(
                 values["error"] ?? String(localized: "Passkey sign-in failed.")
             )
@@ -97,7 +101,7 @@ final class WebPasskeyAuthorizer: NSObject, WebPasskeyAuthorizing {
                     continuation.resume(throwing: WebPasskeyAuthorizationError.cancelled)
                     return
                 }
-                guard self?.callbackValues(from: callbackURL)["state"] == expectedState else {
+                guard Self.callbackValues(from: callbackURL)["state"] == expectedState else {
                     continuation.resume(throwing: WebPasskeyAuthorizationError.failed(
                         String(localized: "The passkey callback state is invalid.")
                     ))
@@ -148,7 +152,7 @@ final class WebPasskeyAuthorizer: NSObject, WebPasskeyAuthorizing {
         return pageURL
     }
 
-    private func callbackValues(from url: URL) -> [String: String] {
+    private static func callbackValues(from url: URL) -> [String: String] {
         guard let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment,
               var components = URLComponents(string: "?\(fragment)") else {
             return [:]
@@ -165,6 +169,11 @@ final class WebPasskeyAuthorizer: NSObject, WebPasskeyAuthorizing {
     private static func date(from value: String?) -> Date? {
         guard let value else { return nil }
         let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: value) {
+            return date
+        }
+        formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: value)
     }
 }

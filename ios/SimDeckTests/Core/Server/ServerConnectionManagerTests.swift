@@ -106,6 +106,34 @@ final class ServerConnectionManagerTests: XCTestCase {
         )
     }
 
+    func testWebPasskeyCallbackAcceptsFractionalSecondExpirations() throws {
+        let callback = URL(string: "simdeck://passkey#status=success&access_token=access&refresh_token=refresh&access_expires_at=2026-11-03T15%3A59%3A37.247154790Z&refresh_expires_at=2026-12-03T15%3A44%3A37.247Z")!
+
+        let session = try WebPasskeyAuthorizer.session(from: callback)
+
+        XCTAssertEqual(session.accessToken, "access")
+        XCTAssertEqual(session.refreshToken, "refresh")
+        XCTAssertEqual(
+            session.accessExpiresAt.timeIntervalSince1970.truncatingRemainder(dividingBy: 1),
+            0.247,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            session.refreshExpiresAt.timeIntervalSince1970.truncatingRemainder(dividingBy: 1),
+            0.247,
+            accuracy: 0.001
+        )
+    }
+
+    func testWebPasskeyCallbackStillAcceptsWholeSecondExpirations() throws {
+        let callback = URL(string: "simdeck://passkey#status=success&access_token=access&refresh_token=refresh&access_expires_at=2026-11-03T15%3A59%3A37Z&refresh_expires_at=2026-12-03T15%3A44%3A37Z")!
+
+        let session = try WebPasskeyAuthorizer.session(from: callback)
+
+        XCTAssertEqual(session.accessToken, "access")
+        XCTAssertEqual(session.refreshToken, "refresh")
+    }
+
     func testRegistersNativePasskeyWithAuthenticatedWebAuthnCeremony() async throws {
         let challengeData = Data([0xfb, 0xff, 0x00])
         let userID = Data([0x01, 0x02, 0x03])
