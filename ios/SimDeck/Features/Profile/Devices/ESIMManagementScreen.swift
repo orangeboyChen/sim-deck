@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import CoreImage
+import PhotosUI
 import SwiftUI
 
 struct ESIMManagementScreen: View {
@@ -309,6 +311,7 @@ private struct ESIMAddProfileSheet: View {
     @State private var method: EntryMethod = .scan
     @State private var activationCode = ""
     @State private var isScannerPresented = false
+    @State private var selectedPhoto: PhotosPickerItem?
     @State private var isWorking = false
     @State private var errorDescription: String?
 
@@ -322,6 +325,11 @@ private struct ESIMAddProfileSheet: View {
                     } label: {
                         Label("Use QR Code", systemImage: "qrcode.viewfinder")
                     }
+
+                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                        Label("Choose QR Code from Photos", systemImage: "photo.on.rectangle")
+                    }
+                    .disabled(isWorking)
 
                     Button {
                         method = .manual
@@ -378,8 +386,29 @@ private struct ESIMAddProfileSheet: View {
                 }
                 .ignoresSafeArea()
             }
+            .onChange(of: selectedPhoto) { _, photo in
+                guard let photo else { return }
+                Task { await importQRCode(from: photo) }
+            }
             .scrollEdgeEffectStyle(.soft, for: .all)
         }
+    }
+
+    private func importQRCode(from photo: PhotosPickerItem) async {
+        do {
+            guard let data = try await photo.loadTransferable(type: Data.self),
+                  let code = ESIMQRCodeReader.activationCode(in: data) else {
+                errorDescription = String(localized: "No eSIM QR code was found in the selected photo.")
+                selectedPhoto = nil
+                return
+            }
+            activationCode = code
+            method = .manual
+            errorDescription = nil
+        } catch {
+            errorDescription = error.localizedDescription
+        }
+        selectedPhoto = nil
     }
 
     private func addProfile() {
@@ -395,6 +424,22 @@ private struct ESIMAddProfileSheet: View {
                 isWorking = false
             }
         }
+    }
+}
+
+enum ESIMQRCodeReader {
+    static func activationCode(in imageData: Data) -> String? {
+        guard let image = CIImage(data: imageData, options: [.applyOrientationProperty: true]) else {
+            return nil
+        }
+        let detector = CIDetector(
+            ofType: CIDetectorTypeQRCode,
+            context: CIContext(),
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+        )
+        return detector?.features(in: image)
+            .compactMap { ($0 as? CIQRCodeFeature)?.messageString }
+            .first { $0.hasPrefix("LPA:1$") || $0.hasPrefix("1$") }
     }
 }
 

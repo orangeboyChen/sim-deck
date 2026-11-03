@@ -749,6 +749,16 @@
         }
       }
     },
+    "Choose QR Code from Photos" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从相册选择二维码"
+          }
+        }
+      }
+    },
     "Choose contact" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2182,6 +2192,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "暂未发现设备"
+          }
+        }
+      }
+    },
+    "No eSIM QR code was found in the selected photo." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选照片中未找到 eSIM 二维码。"
           }
         }
       }
