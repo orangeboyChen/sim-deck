@@ -11,6 +11,9 @@ struct SlotSettings: Codable, Equatable, Sendable {
     var incomingCallsEnabled: Bool
     var incomingSMSEnabled: Bool
     var volteEnabled: Bool
+    var wifiCallingEnabled: Bool
+    var wifiCallingAvailable: Bool
+    var wifiCallingStatus: String
     var mmsAPN: String
     var mmscURL: String
     var mmsProxyHost: String
@@ -23,6 +26,9 @@ struct SlotSettings: Codable, Equatable, Sendable {
         incomingCallsEnabled: Bool,
         incomingSMSEnabled: Bool,
         volteEnabled: Bool = false,
+        wifiCallingEnabled: Bool = false,
+        wifiCallingAvailable: Bool = false,
+        wifiCallingStatus: String = "",
         mmsAPN: String = "",
         mmscURL: String = "",
         mmsProxyHost: String = "",
@@ -34,6 +40,9 @@ struct SlotSettings: Codable, Equatable, Sendable {
         self.incomingCallsEnabled = incomingCallsEnabled
         self.incomingSMSEnabled = incomingSMSEnabled
         self.volteEnabled = volteEnabled
+        self.wifiCallingEnabled = wifiCallingEnabled
+        self.wifiCallingAvailable = wifiCallingAvailable
+        self.wifiCallingStatus = wifiCallingStatus
         self.mmsAPN = mmsAPN
         self.mmscURL = mmscURL
         self.mmsProxyHost = mmsProxyHost
@@ -48,6 +57,9 @@ struct SlotSettings: Codable, Equatable, Sendable {
         incomingCallsEnabled = try container.decode(Bool.self, forKey: .incomingCallsEnabled)
         incomingSMSEnabled = try container.decode(Bool.self, forKey: .incomingSMSEnabled)
         volteEnabled = try container.decodeIfPresent(Bool.self, forKey: .volteEnabled) ?? false
+        wifiCallingEnabled = try container.decodeIfPresent(Bool.self, forKey: .wifiCallingEnabled) ?? false
+        wifiCallingAvailable = try container.decodeIfPresent(Bool.self, forKey: .wifiCallingAvailable) ?? false
+        wifiCallingStatus = try container.decodeIfPresent(String.self, forKey: .wifiCallingStatus) ?? ""
         mmsAPN = try container.decodeIfPresent(String.self, forKey: .mmsAPN) ?? ""
         mmscURL = try container.decodeIfPresent(String.self, forKey: .mmscURL) ?? ""
         mmsProxyHost = try container.decodeIfPresent(String.self, forKey: .mmsProxyHost) ?? ""
@@ -69,6 +81,9 @@ struct SlotSettings: Codable, Equatable, Sendable {
         case incomingCallsEnabled = "incoming_calls_enabled"
         case incomingSMSEnabled = "incoming_sms_enabled"
         case volteEnabled = "volte_enabled"
+        case wifiCallingEnabled = "wifi_calling_enabled"
+        case wifiCallingAvailable = "wifi_calling_available"
+        case wifiCallingStatus = "wifi_calling_status"
         case mmsAPN = "mms_apn"
         case mmscURL = "mmsc_url"
         case mmsProxyHost = "mms_proxy_host"
@@ -101,6 +116,9 @@ enum SlotSettingsTransportError: LocalizedError, Equatable {
 protocol SlotSettingsTransport: AnyObject {
     func load(line: DeviceLineIdentity) async throws -> SlotSettings
     func update(_ settings: SlotSettings, line: DeviceLineIdentity) async throws -> SlotSettings
+    func load(line: DeviceLineIdentity, profileID: String?) async throws -> SlotSettings
+    func update(_ settings: SlotSettings, line: DeviceLineIdentity, profileID: String?) async throws -> SlotSettings
+    func probeWiFiCalling(line: DeviceLineIdentity, profileID: String?) async throws -> SlotSettings
     func restartModem(line: DeviceLineIdentity) async throws
 }
 
@@ -134,11 +152,34 @@ final class LiveSlotSettingsTransport: SlotSettingsTransport {
     }
 
     func load(line: DeviceLineIdentity) async throws -> SlotSettings {
-        try await configure(nil, line: line)
+        try await configure(nil, line: line, profileID: nil)
     }
 
     func update(_ settings: SlotSettings, line: DeviceLineIdentity) async throws -> SlotSettings {
-        try await configure(settings, line: line)
+        try await configure(settings, line: line, profileID: nil)
+    }
+
+    func load(line: DeviceLineIdentity, profileID: String?) async throws -> SlotSettings {
+        try await configure(nil, line: line, profileID: profileID)
+    }
+
+    func update(_ settings: SlotSettings, line: DeviceLineIdentity, profileID: String?) async throws -> SlotSettings {
+        try await configure(settings, line: line, profileID: profileID)
+    }
+
+    func probeWiFiCalling(line: DeviceLineIdentity, profileID: String?) async throws -> SlotSettings {
+        guard commandSigner.identity != nil else { throw SlotSettingsTransportError.unavailable }
+        let target = try await api.commandTarget(for: line)
+        let result = try await execute(
+            SlotSettingsCommandPayload(
+                version: 1, operation: "slot.probe_vowifi", slotID: target.slotID, simID: target.simID,
+                dataEnabled: nil, airplaneModeEnabled: nil, incomingCallsEnabled: nil,
+                incomingSMSEnabled: nil, volteEnabled: nil, esimProfileID: profileID
+            ), target: target, line: line
+        )
+        guard result.success else { throw SlotSettingsTransportError.rejected }
+        guard let settings = result.slotSettings else { throw SlotSettingsTransportError.invalidResponse }
+        return settings
     }
 
     func restartModem(line: DeviceLineIdentity) async throws {
@@ -171,7 +212,8 @@ final class LiveSlotSettingsTransport: SlotSettingsTransport {
 
     private func configure(
         _ settings: SlotSettings?,
-        line: DeviceLineIdentity
+        line: DeviceLineIdentity,
+        profileID: String?
     ) async throws -> SlotSettings {
         guard commandSigner.identity != nil else {
             throw SlotSettingsTransportError.unavailable
@@ -187,6 +229,8 @@ final class LiveSlotSettingsTransport: SlotSettingsTransport {
             incomingCallsEnabled: settings?.incomingCallsEnabled,
             incomingSMSEnabled: settings?.incomingSMSEnabled,
             volteEnabled: settings?.volteEnabled,
+            esimProfileID: profileID,
+            wifiCallingEnabled: settings?.wifiCallingAvailable == true ? settings?.wifiCallingEnabled : nil,
             mmsAPN: settings?.mmsAPN,
             mmscURL: settings?.mmscURL,
             mmsProxyHost: settings?.mmsProxyHost,
@@ -263,6 +307,8 @@ struct SlotSettingsCommandPayload: Codable, Equatable, Sendable {
     let incomingCallsEnabled: Bool?
     let incomingSMSEnabled: Bool?
     let volteEnabled: Bool?
+    let esimProfileID: String?
+    let wifiCallingEnabled: Bool?
     let mmsAPN: String?
     let mmscURL: String?
     let mmsProxyHost: String?
@@ -279,6 +325,8 @@ struct SlotSettingsCommandPayload: Codable, Equatable, Sendable {
         incomingCallsEnabled: Bool?,
         incomingSMSEnabled: Bool?,
         volteEnabled: Bool?,
+        esimProfileID: String? = nil,
+        wifiCallingEnabled: Bool? = nil,
         mmsAPN: String? = nil,
         mmscURL: String? = nil,
         mmsProxyHost: String? = nil,
@@ -294,6 +342,8 @@ struct SlotSettingsCommandPayload: Codable, Equatable, Sendable {
         self.incomingCallsEnabled = incomingCallsEnabled
         self.incomingSMSEnabled = incomingSMSEnabled
         self.volteEnabled = volteEnabled
+        self.esimProfileID = esimProfileID
+        self.wifiCallingEnabled = wifiCallingEnabled
         self.mmsAPN = mmsAPN
         self.mmscURL = mmscURL
         self.mmsProxyHost = mmsProxyHost
@@ -311,6 +361,8 @@ struct SlotSettingsCommandPayload: Codable, Equatable, Sendable {
         case incomingCallsEnabled = "incoming_calls_enabled"
         case incomingSMSEnabled = "incoming_sms_enabled"
         case volteEnabled = "volte_enabled"
+        case esimProfileID = "esim_profile_id"
+        case wifiCallingEnabled = "wifi_calling_enabled"
         case mmsAPN = "mms_apn"
         case mmscURL = "mmsc_url"
         case mmsProxyHost = "mms_proxy_host"

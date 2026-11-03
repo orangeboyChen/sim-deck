@@ -34,6 +34,10 @@ import (
 	"sim-deck-device/internal/serverapi"
 	"sim-deck-device/internal/slotpolicy"
 	"sim-deck-device/internal/sms"
+	"sim-deck-device/internal/vowifi/atbridge"
+	"sim-deck-device/internal/vowifi/gateway"
+	"sim-deck-device/internal/vowifi/route"
+	"sim-deck-device/internal/vowifi/sipline"
 )
 
 var errSIMIdentityChanged = errors.New("SIM identity changed; restart the device agent to reload event identity")
@@ -82,6 +86,9 @@ func runAuto(ctx context.Context, config agent.Config, logger *slog.Logger) erro
 	modems, err := discovery.Discover(ctx, config.DeviceRoot, config.SysfsRoot)
 	if err != nil {
 		return fmt.Errorf("discover modem topology: %w", err)
+	}
+	if config.VoWiFiSIPRegistrar != "" && len(modems) > 1 {
+		return errors.New("Wi-Fi Calling SIP configuration requires a single-modem worker")
 	}
 	nodeID := readNodeID()
 	logger.Info("node topology discovered", "platform", runtime.GOOS, "node_id", nodeID, "modem_count", len(modems), "tree", discovery.Tree(modems, nodeID, runtime.GOOS))
@@ -279,6 +286,12 @@ type callMediaRuntime interface {
 	Close() error
 }
 
+type callRuntime interface {
+	command.Calls
+	Events() <-chan call.Snapshot
+	Subscribe() <-chan call.Snapshot
+}
+
 type messageEventPublisher interface {
 	Publish(context.Context, sms.ReceivedMessage) error
 }
@@ -432,7 +445,7 @@ func productionDependencies(httpClient *http.Client) deviceDependencies {
 			return incomingcall.NewRuntime(serverapi.NewClient(config.ServerURL, httpClient), state, snapshots, events, calls, policy)
 		},
 		newSlotPolicy: func(config agent.Config, client *at.Client) (slotPolicyRuntime, error) {
-			return slotpolicy.NewController(config.StateDirectory, client, config.CommandTimeout)
+			return slotpolicy.NewControllerWithWiFiCalling(config.StateDirectory, client, config.CommandTimeout, config.VoWiFiSIPRegistrar != "")
 		},
 		newCallMedia: func(config agent.Config) (callMediaRuntime, error) {
 			return newCallMedia(config, nil)
@@ -472,9 +485,11 @@ func newCallMedia(config agent.Config, servers []media.ICEServer) (callMediaRunt
 }
 
 func newCallMediaWithProvider(config agent.Config, state identity.State, provider func(context.Context, agent.Config, identity.State) ([]media.ICEServer, error)) (callMediaRuntime, error) {
-	return media.NewManagerWithICEProvider(media.ICEConfig{}, func(ctx context.Context) ([]media.ICEServer, error) {
-		return provider(ctx, config, state)
-	}, func(ctx context.Context) (media.DuplexPCM, error) {
+	return newCallMediaWithEndpoint(config, state, provider, cellularEndpoint(config))
+}
+
+func cellularEndpoint(config agent.Config) media.EndpointFactory {
+	return func(ctx context.Context) (media.DuplexPCM, error) {
 		switch config.AudioMode {
 		case agent.AudioModeALSA:
 			return media.OpenALSAEndpoint(ctx, config.ALSACaptureDevice, config.ALSAPlaybackDevice)
@@ -485,7 +500,13 @@ func newCallMediaWithProvider(config agent.Config, state identity.State, provide
 		default:
 			return nil, fmt.Errorf("unsupported audio mode %q", config.AudioMode)
 		}
-	})
+	}
+}
+
+func newCallMediaWithEndpoint(config agent.Config, state identity.State, provider func(context.Context, agent.Config, identity.State) ([]media.ICEServer, error), endpoint media.EndpointFactory) (callMediaRuntime, error) {
+	return media.NewManagerWithICEProvider(media.ICEConfig{}, func(ctx context.Context) ([]media.ICEServer, error) {
+		return provider(ctx, config, state)
+	}, endpoint)
 }
 
 func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, ready *atomic.Bool, dependencies deviceDependencies) error {
@@ -525,7 +546,41 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	if err != nil {
 		return fmt.Errorf("open slot policy: %w", err)
 	}
-
+	var wifiMetrics *gateway.Metrics
+	var wifiCalls *route.Controller
+	invalidateIMS := func() {
+		if wifiMetrics == nil {
+			return
+		}
+		wifiMetrics.Invalidate()
+		if writeError := gateway.RequestRestart(config.StateDirectory); writeError != nil {
+			logger.Error("failed to request IMS companion restart after SIM identity change", "error", writeError)
+		}
+		if wifiCalls != nil {
+			go func() {
+				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = wifiCalls.InvalidateProfile(cleanup)
+			}()
+		}
+	}
+	if config.VoWiFiSIPRegistrar != "" {
+		wifiMetrics, err = gateway.NewMetrics(config.VoWiFiMetricsURL)
+		if err != nil {
+			return fmt.Errorf("open IMS gateway status: %w", err)
+		}
+		if probe, ok := policy.(interface {
+			SetWiFiCallingProbe(func(context.Context) (string, error))
+		}); ok {
+			probe.SetWiFiCallingProbe(wifiMetrics.Probe)
+		}
+		if status, ok := policy.(interface{ SetWiFiCallingStatusProvider(func() string) }); ok {
+			status.SetWiFiCallingStatusProvider(wifiMetrics.Status)
+		}
+		if changes, ok := policy.(interface{ SetProfileChanged(func(string)) }); ok {
+			changes.SetProfileChanged(func(string) { invalidateIMS() })
+		}
+	}
 	inbox, err := dependencies.openInbox(
 		filepath.Join(config.StateDirectory, "sms-inbox.json"),
 		365*24*time.Hour,
@@ -582,6 +637,27 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	if err := session.ClearOrphanedCalls(ctx); err != nil {
 		return fmt.Errorf("reconcile modem calls after startup: %w", err)
 	}
+	if eSIMSupported {
+		if reader, ok := session.(esimProfileCommandReader); ok {
+			profiles, listError := reader.ListESIMProfiles(ctx)
+			if listError != nil {
+				logger.Warn("active eSIM profile policy could not be synchronized", "error", listError)
+			} else {
+				activeID := ""
+				for _, profile := range profiles {
+					if profile.Enabled {
+						activeID = profile.ICCID
+						break
+					}
+				}
+				if err := policy.SelectProfile(ctx, activeID); err != nil {
+					return fmt.Errorf("select active eSIM profile policy: %w", err)
+				}
+			}
+		}
+	} else if err := policy.SelectProfile(ctx, ""); err != nil {
+		return fmt.Errorf("restore physical SIM slot policy: %w", err)
+	}
 	if err := policy.Restore(ctx); err != nil {
 		return fmt.Errorf("restore slot policy: %w", err)
 	}
@@ -598,6 +674,9 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 		if fingerprintError != nil {
 			return fmt.Errorf("fingerprint eUICC identity: %w", fingerprintError)
 		}
+		if fingerprint != deviceIdentity.SIMFingerprint {
+			invalidateIMS()
+		}
 		deviceIdentity, err = identityStore.SetSIMFingerprint(deviceIdentity, fingerprint)
 		if err != nil {
 			return fmt.Errorf("persist eUICC identity fingerprint: %w", err)
@@ -612,16 +691,29 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 		if fingerprintError != nil {
 			return fmt.Errorf("fingerprint SIM identity: %w", fingerprintError)
 		}
+		if fingerprint != deviceIdentity.SIMFingerprint {
+			invalidateIMS()
+		}
 		deviceIdentity, err = identityStore.SetSIMFingerprint(deviceIdentity, fingerprint)
 		if err != nil {
 			return fmt.Errorf("persist SIM identity fingerprint: %w", err)
 		}
 		logger.Info("SIM card identity detected", "slot_key", deviceIdentity.SlotKey, "slot_index", deviceIdentity.SlotIndex)
 	} else {
+		if deviceIdentity.SIMFingerprint != "" {
+			invalidateIMS()
+		}
 		logger.Warn("SIM card identity is unavailable; using slot-local identity", "slot_key", deviceIdentity.SlotKey, "error", iccidError)
 	}
 	if err := dependencies.configureAudio(ctx, config, client); err != nil {
 		return fmt.Errorf("configure modem audio: %w", err)
+	}
+	if config.VoWiFiATBridge {
+		bridge, err := atbridge.Start(ctx, filepath.Join(config.StateDirectory, "ims-at.sock"), client, config.CommandTimeout)
+		if err != nil {
+			return fmt.Errorf("start IMS AT bridge: %w", err)
+		}
+		defer bridge.Close()
 	}
 	ready.Store(true)
 	defer ready.Store(false)
@@ -689,16 +781,37 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	if err := session.RetryPendingSMS(ctx); err != nil {
 		return fmt.Errorf("synchronize pending SMS: %w", err)
 	}
-	events, err := dependencies.newCallEvents(config, deviceIdentity, session.Calls().Events())
+	var calls callRuntime = session.Calls()
+	if config.VoWiFiSIPRegistrar != "" {
+		wifiCalls, err = route.NewWithFactory(ctx, session.Calls(), func() (route.Line, error) {
+			return route.NewLocalLine(sipline.Config{
+				Registrar: config.VoWiFiSIPRegistrar, Username: config.VoWiFiSIPUsername,
+				Password: config.VoWiFiSIPPassword, BindHost: config.VoWiFiSIPBindHost,
+				BindPort: config.VoWiFiSIPBindPort,
+			})
+		}, func() bool {
+			return policy.Current().WiFiCallingEnabled && wifiMetrics.Ready()
+		})
+		if err != nil {
+			return fmt.Errorf("create Wi-Fi Calling call route: %w", err)
+		}
+		calls = wifiCalls
+	}
+	events, err := dependencies.newCallEvents(config, deviceIdentity, calls.Events())
 	if err != nil {
 		return fmt.Errorf("create encrypted call event runtime: %w", err)
 	}
-	incomingCalls, err := dependencies.newIncomingCalls(config, deviceIdentity, session.Calls().Subscribe(), events, session.Calls(), policy)
+	incomingCalls, err := dependencies.newIncomingCalls(config, deviceIdentity, calls.Subscribe(), events, calls, policy)
 	if err != nil {
 		return fmt.Errorf("create incoming call runtime: %w", err)
 	}
 	var callMedia callMediaRuntime
-	if dependencies.newCallMediaWithICEProvider != nil && dependencies.fetchTURNCredentials != nil {
+	if wifiCalls != nil {
+		callMedia, err = newCallMediaWithEndpoint(config, deviceIdentity, dependencies.fetchTURNCredentials,
+			func(ctx context.Context) (media.DuplexPCM, error) {
+				return wifiCalls.OpenPCM(ctx, cellularEndpoint(config))
+			})
+	} else if dependencies.newCallMediaWithICEProvider != nil && dependencies.fetchTURNCredentials != nil {
 		callMedia, err = dependencies.newCallMediaWithICEProvider(config, deviceIdentity, dependencies.fetchTURNCredentials)
 	} else if dependencies.newCallMediaWithICE != nil {
 		callMedia, err = dependencies.newCallMediaWithICE(config, nil)
@@ -713,7 +826,7 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	if reader, ok := session.(esimProfileCommandReader); ok {
 		esimProfiles = modemESIMProfiles{reader: reader}
 	}
-	commands, err := dependencies.newCommands(config, deviceIdentity, session.Calls(), command.Dependencies{Events: events, Media: callMedia, Messages: session, ESIMProfiles: esimProfiles, SlotSettings: policy, Logger: logger})
+	commands, err := dependencies.newCommands(config, deviceIdentity, calls, command.Dependencies{Events: events, Media: callMedia, Messages: session, ESIMProfiles: esimProfiles, ESIMSupported: eSIMSupported, SlotSettings: policy, Logger: logger})
 	if err != nil {
 		return fmt.Errorf("create encrypted command runtime: %w", err)
 	}
@@ -739,26 +852,43 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	)
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go handleMediaErrors(runContext, callMedia.Errors(), session.Calls(), logger)
-	results := make(chan error, 6)
+	go handleMediaErrors(runContext, callMedia.Errors(), calls, logger)
+	workerCount := 6
+	if wifiCalls != nil {
+		workerCount += 2
+	}
+	profileReader, watchesProfiles := session.(esimProfileCommandReader)
+	if eSIMSupported && watchesProfiles {
+		workerCount++
+	}
+	results := make(chan error, workerCount)
+	if wifiCalls != nil {
+		go func() { results <- wifiCalls.Run(runContext) }()
+		go func() { results <- wifiMetrics.Run(runContext) }()
+	}
 	go func() { results <- session.Run(runContext) }()
 	go func() { results <- commands.Run(runContext) }()
 	go func() { results <- events.Run(runContext) }()
 	go func() { results <- incomingCalls.Run(runContext) }()
 	go func() { results <- radioStatus.Run(runContext) }()
+	if eSIMSupported && watchesProfiles {
+		go func() {
+			results <- synchronizeActiveESIMProfile(runContext, profileReader, policy, config.RadioStatusPoll, logger)
+		}()
+	}
 	if eSIMSupported {
 		go func() {
-			results <- synchronizeEUICCIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger)
+			results <- synchronizeEUICCIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger, invalidateIMS)
 		}()
 	} else {
 		go func() {
-			results <- synchronizeSIMIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger)
+			results <- synchronizeSIMIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger, invalidateIMS)
 		}()
 	}
 	first := <-results
 	cancel()
 	resultsToCheck := []error{first}
-	for count := 1; count < 6; count++ {
+	for count := 1; count < workerCount; count++ {
 		resultsToCheck = append(resultsToCheck, <-results)
 	}
 	for _, result := range resultsToCheck {
@@ -767,6 +897,46 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 		}
 	}
 	return resultsToCheck[len(resultsToCheck)-1]
+}
+
+func synchronizeActiveESIMProfile(
+	ctx context.Context,
+	reader interface {
+		ListESIMProfiles(context.Context) ([]modem.ESIMProfile, error)
+	},
+	policy interface {
+		SelectProfile(context.Context, string) error
+	},
+	interval time.Duration,
+	logger *slog.Logger,
+) error {
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			profiles, err := reader.ListESIMProfiles(ctx)
+			if err != nil {
+				logger.Warn("active eSIM profile poll failed", "error", err)
+				continue
+			}
+			activeID := ""
+			for _, profile := range profiles {
+				if profile.Enabled {
+					activeID = profile.ICCID
+					break
+				}
+			}
+			if err := policy.SelectProfile(ctx, activeID); err != nil {
+				logger.Warn("active eSIM profile policy could not be synchronized", "error", err)
+			}
+		}
+	}
 }
 
 // synchronizeSIMIdentity detects hot-swapped cards without persisting the ICCID itself.
@@ -778,6 +948,7 @@ func synchronizeSIMIdentity(
 	state identity.State,
 	synchronize func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error),
 	logger *slog.Logger,
+	onChange ...func(),
 ) error {
 	return synchronizeSIMIdentityWithFingerprint(ctx, session, config, store, state, synchronize, logger, func(ctx context.Context, current identity.State) (string, error) {
 		iccid, err := session.ReadSIMICCID(ctx)
@@ -785,7 +956,7 @@ func synchronizeSIMIdentity(
 			return "", err
 		}
 		return current.FingerprintSIM(iccid)
-	})
+	}, onChange...)
 }
 
 func readEUICCIdentifier(ctx context.Context, session deviceSession) (string, error) {
@@ -810,6 +981,7 @@ func synchronizeEUICCIdentity(
 	state identity.State,
 	synchronize func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error),
 	logger *slog.Logger,
+	onChange ...func(),
 ) error {
 	return synchronizeSIMIdentityWithFingerprint(ctx, session, config, store, state, synchronize, logger, func(ctx context.Context, current identity.State) (string, error) {
 		eid, err := readEUICCIdentifier(ctx, session)
@@ -817,7 +989,7 @@ func synchronizeEUICCIdentity(
 			return "", err
 		}
 		return current.FingerprintEUICC(eid)
-	})
+	}, onChange...)
 }
 
 func synchronizeSIMIdentityWithFingerprint(
@@ -829,6 +1001,7 @@ func synchronizeSIMIdentityWithFingerprint(
 	synchronize func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error),
 	logger *slog.Logger,
 	fingerprintIdentity func(context.Context, identity.State) (string, error),
+	onChange ...func(),
 ) error {
 	interval := config.RadioStatusPoll
 	if interval <= 0 {
@@ -837,6 +1010,13 @@ func synchronizeSIMIdentityWithFingerprint(
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	current := state
+	lastNotifiedFingerprint := ""
+	identityUnavailable := false
+	notifyChange := func() {
+		for _, notify := range onChange {
+			notify()
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -844,11 +1024,21 @@ func synchronizeSIMIdentityWithFingerprint(
 		case <-ticker.C:
 			fingerprint, err := fingerprintIdentity(ctx, current)
 			if err != nil {
+				if current.SIMFingerprint != "" && !identityUnavailable {
+					notifyChange()
+					identityUnavailable = true
+				}
 				logger.Warn("SIM identity poll failed", "slot_key", current.SlotKey, "error", err)
 				continue
 			}
+			identityUnavailable = false
 			if fingerprint == current.SIMFingerprint {
+				lastNotifiedFingerprint = ""
 				continue
+			}
+			if fingerprint != lastNotifiedFingerprint {
+				notifyChange()
+				lastNotifiedFingerprint = fingerprint
 			}
 			requestState := current
 			requestState.SIMFingerprint = fingerprint

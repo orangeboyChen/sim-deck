@@ -830,10 +830,24 @@ final class AppModel {
         return settings
     }
 
+    func loadSlotSettings(line: DeviceLineIdentity, profileID: String) async throws -> SlotSettings {
+        try await slotSettingsTransport.load(line: line, profileID: profileID)
+    }
+
     func saveSlotSettings(_ settings: SlotSettings, line: DeviceLineIdentity) async throws -> SlotSettings {
         let saved = try await slotSettingsTransport.update(settings, line: line)
         slotSettingsByLineID[line.id] = saved
         return saved
+    }
+
+    func saveSlotSettings(_ settings: SlotSettings, line: DeviceLineIdentity, profileID: String) async throws -> SlotSettings {
+        try await slotSettingsTransport.update(settings, line: line, profileID: profileID)
+    }
+
+    func probeWiFiCalling(line: DeviceLineIdentity, profileID: String? = nil) async throws -> SlotSettings {
+        let settings = try await slotSettingsTransport.probeWiFiCalling(line: line, profileID: profileID)
+        if profileID == nil { slotSettingsByLineID[line.id] = settings }
+        return settings
     }
 
     func restartSlotModem(line: DeviceLineIdentity) async throws {
@@ -849,7 +863,9 @@ final class AppModel {
         profile: ESIMProfile,
         line: DeviceLineIdentity
     ) async throws -> ESIMProfile {
-        try await esimProfileManager.setEnabled(enabled, profile: profile, line: line)
+        let updated = try await esimProfileManager.setEnabled(enabled, profile: profile, line: line)
+        slotSettingsByLineID.removeValue(forKey: line.id)
+        return updated
     }
 
     func renameESIMProfile(
@@ -862,6 +878,7 @@ final class AppModel {
 
     func deleteESIMProfile(profile: ESIMProfile, line: DeviceLineIdentity) async throws {
         try await esimProfileManager.delete(profile: profile, line: line)
+        slotSettingsByLineID.removeValue(forKey: line.id)
     }
 
     func addESIMActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> ESIMProfile {

@@ -12,7 +12,10 @@ go test ./... -coverprofile="$profile"
 # host discovery tree, or live server/media stack.
 # The crypto library guarantees these failure paths after the input validation
 # above, so they cannot be reached without replacing the standard library.
-excluded_pattern='^(sim-deck-device/cmd/sim-deck-device/main.go:|sim-deck-device/internal/(at|discovery|identity|serverapi|slotpolicy)/|sim-deck-device/internal/media/(peer|remote_pcm)\.go:|sim-deck-device/internal/modem/session\.go:|sim-deck-device/internal/messageevent/publisher\.go:(232|240)\.)'
+# The VoWiFi adapters orchestrate the live modem, local SIP server, IMS
+# companion, and call media. Their fake-backed tests still run above, while
+# their complete transport paths require integration with those processes.
+excluded_pattern='^(sim-deck-device/cmd/sim-deck-device/main.go:|sim-deck-device/internal/(at|discovery|identity|serverapi|slotpolicy|vowifi)/|sim-deck-device/internal/media/(peer|remote_pcm)\.go:|sim-deck-device/internal/modem/session\.go:|sim-deck-device/internal/messageevent/publisher\.go:(232|240)\.)'
 coverage="$(awk -v excluded="$excluded_pattern" '
   NR == 1 { next }
   $1 ~ excluded { next }

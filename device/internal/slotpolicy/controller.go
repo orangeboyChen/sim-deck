@@ -5,23 +5,28 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"sim-deck-device/internal/at"
 )
 
-const stateVersion = 1
+const stateVersion = 2
 
 // Settings is the effective owner policy for one physical modem slot.
 type Settings struct {
-	DataEnabled          bool `json:"data_enabled"`
-	AirplaneModeEnabled  bool `json:"airplane_mode_enabled"`
-	IncomingCallsEnabled bool `json:"incoming_calls_enabled"`
-	IncomingSMSEnabled   bool `json:"incoming_sms_enabled"`
-	VoLTEEnabled         bool `json:"volte_enabled"`
+	DataEnabled          bool   `json:"data_enabled"`
+	AirplaneModeEnabled  bool   `json:"airplane_mode_enabled"`
+	IncomingCallsEnabled bool   `json:"incoming_calls_enabled"`
+	IncomingSMSEnabled   bool   `json:"incoming_sms_enabled"`
+	VoLTEEnabled         bool   `json:"volte_enabled"`
+	WiFiCallingEnabled   bool   `json:"wifi_calling_enabled"`
+	WiFiCallingAvailable bool   `json:"wifi_calling_available"`
+	WiFiCallingStatus    string `json:"wifi_calling_status,omitempty"`
 }
 
 // Update contains optional policy changes from an authenticated encrypted command.
@@ -31,6 +36,7 @@ type Update struct {
 	IncomingCallsEnabled *bool
 	IncomingSMSEnabled   *bool
 	VoLTEEnabled         *bool
+	WiFiCallingEnabled   *bool
 }
 
 // Commander is the serialized AT command capability required by the policy controller.
@@ -40,20 +46,60 @@ type Commander interface {
 
 // Controller persists slot policy and applies its radio-related settings to the modem.
 type Controller struct {
-	mu        sync.RWMutex
-	path      string
-	commander Commander
-	timeout   time.Duration
-	settings  Settings
+	mu                 sync.RWMutex
+	path               string
+	commander          Commander
+	timeout            time.Duration
+	settings           Settings
+	profiles           map[string]Settings
+	activeProfileID    string
+	radioPending       bool
+	lookupIP           func(context.Context, string) ([]net.IPAddr, error)
+	wifiCallingBackend bool
+	wifiCallingProbe   func(context.Context) (string, error)
+	wifiCallingStatus  func() string
+	profileChanged     func(string)
+}
+
+// SetWiFiCallingProbe supplies actual carrier IMS status from the companion.
+func (controller *Controller) SetWiFiCallingProbe(probe func(context.Context) (string, error)) {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	controller.wifiCallingProbe = probe
+}
+
+// SetWiFiCallingStatusProvider supplies the companion's latest cached status
+// for radio updates without polling the companion from the policy read path.
+func (controller *Controller) SetWiFiCallingStatusProvider(status func() string) {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	controller.wifiCallingStatus = status
+}
+
+// SetProfileChanged installs a callback that invalidates the previous
+// profile's IMS registration before the new profile can place calls.
+func (controller *Controller) SetProfileChanged(changed func(string)) {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	controller.profileChanged = changed
 }
 
 type persistedSettings struct {
 	Version int `json:"version"`
 	Settings
+	Profiles        map[string]Settings `json:"profiles,omitempty"`
+	ActiveProfileID string              `json:"active_profile_id,omitempty"`
+	RadioPending    bool                `json:"radio_pending,omitempty"`
 }
 
 // NewController opens the durable policy for one modem container.
 func NewController(directory string, commander Commander, timeout time.Duration) (*Controller, error) {
+	return NewControllerWithWiFiCalling(directory, commander, timeout, false)
+}
+
+// NewControllerWithWiFiCalling preserves VoWiFi preferences only when a
+// device-side IMS call backend is configured for this modem.
+func NewControllerWithWiFiCalling(directory string, commander Commander, timeout time.Duration, backend bool) (*Controller, error) {
 	if directory == "" || !filepath.IsAbs(directory) || commander == nil || timeout <= 0 {
 		return nil, errors.New("slot policy requires an absolute state directory, modem commander, and positive timeout")
 	}
@@ -61,24 +107,156 @@ func NewController(directory string, commander Commander, timeout time.Duration)
 		return nil, fmt.Errorf("create slot policy directory: %w", err)
 	}
 	path := filepath.Join(directory, "slot-policy.json")
-	settings, err := load(path)
+	state, err := load(path)
 	if err != nil {
 		return nil, err
 	}
-	return &Controller{path: path, commander: commander, timeout: timeout, settings: settings}, nil
+	if state.Profiles == nil {
+		state.Profiles = make(map[string]Settings)
+	}
+	state.Settings.WiFiCallingAvailable = backend
+	for profileID, settings := range state.Profiles {
+		settings.WiFiCallingAvailable = backend
+		state.Profiles[profileID] = settings
+	}
+	// Earlier builds stored the requested switch state without an IMS backend.
+	// Clear it so callers never mistake that preference for a working service.
+	changed := false
+	if !backend {
+		changed = state.Settings.WiFiCallingEnabled
+		state.Settings.WiFiCallingEnabled = false
+		for profileID, settings := range state.Profiles {
+			if settings.WiFiCallingEnabled {
+				changed = true
+				settings.WiFiCallingEnabled = false
+				state.Profiles[profileID] = settings
+			}
+		}
+	}
+	if changed {
+		if err := save(path, state); err != nil {
+			return nil, fmt.Errorf("clear unavailable Wi-Fi Calling preference: %w", err)
+		}
+	}
+	return &Controller{path: path, commander: commander, timeout: timeout, settings: state.Settings,
+		profiles: state.Profiles, activeProfileID: state.ActiveProfileID, lookupIP: net.DefaultResolver.LookupIPAddr,
+		wifiCallingBackend: backend, radioPending: state.RadioPending}, nil
 }
 
 // Current returns a consistent snapshot of the persisted owner policy.
 func (controller *Controller) Current() Settings {
 	controller.mu.RLock()
 	defer controller.mu.RUnlock()
-	return controller.settings
+	return controller.withLiveWiFiCallingStatus(controller.settings)
+}
+
+// Profile returns stored preferences without applying an inactive profile to the modem.
+func (controller *Controller) Profile(profileID string) Settings {
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	if settings, ok := controller.profiles[profileID]; ok {
+		if profileID == controller.activeProfileID {
+			return controller.withLiveWiFiCallingStatus(settings)
+		}
+		return settings
+	}
+	settings := defaultSettings()
+	settings.WiFiCallingAvailable = controller.wifiCallingBackend
+	return settings
+}
+
+func (controller *Controller) withLiveWiFiCallingStatus(settings Settings) Settings {
+	if controller.wifiCallingBackend && controller.wifiCallingStatus != nil {
+		settings.WiFiCallingStatus = controller.wifiCallingStatus()
+	}
+	return settings
+}
+
+// SelectProfile follows the eUICC's enabled profile and restores its preferences.
+func (controller *Controller) SelectProfile(ctx context.Context, profileID string) error {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if profileID == controller.activeProfileID {
+		return controller.restorePendingRadio(ctx)
+	}
+	previous := controller.settings
+	next := defaultSettings()
+	next.WiFiCallingAvailable = controller.wifiCallingBackend
+	if saved, ok := controller.profiles[profileID]; profileID != "" && ok {
+		next = saved
+	} else if len(controller.profiles) == 0 && controller.activeProfileID == "" {
+		// Migrate the former slot-wide preferences to the first active profile.
+		next = previous
+	}
+	if profileID != "" && next.WiFiCallingStatus != "" {
+		next.WiFiCallingStatus = "not_checked"
+	}
+	profiles := cloneProfiles(controller.profiles)
+	if _, exists := profiles[controller.activeProfileID]; controller.activeProfileID != "" && controller.activeProfileID != profileID && exists {
+		inactive := previous
+		if inactive.WiFiCallingStatus != "" {
+			inactive.WiFiCallingStatus = "inactive_profile"
+		}
+		profiles[controller.activeProfileID] = inactive
+	}
+	if profileID != "" {
+		profiles[profileID] = next
+	}
+	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: next, Profiles: profiles, ActiveProfileID: profileID, RadioPending: true}); err != nil {
+		return err
+	}
+	controller.settings, controller.profiles, controller.activeProfileID, controller.radioPending = next, profiles, profileID, true
+	if controller.profileChanged != nil {
+		controller.profileChanged(profileID)
+	}
+	if err := controller.applyTransition(ctx, previous, next); err != nil {
+		return err
+	}
+	return controller.clearPendingRadio()
+}
+
+func (controller *Controller) clearPendingRadio() error {
+	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: controller.settings,
+		Profiles: controller.profiles, ActiveProfileID: controller.activeProfileID}); err != nil {
+		return err
+	}
+	controller.radioPending = false
+	return nil
+}
+
+func (controller *Controller) restorePendingRadio(ctx context.Context) error {
+	if !controller.radioPending {
+		return nil
+	}
+	if err := controller.applyVoLTE(ctx, controller.settings.VoLTEEnabled); err != nil {
+		return err
+	}
+	if err := controller.applyRadio(ctx, controller.settings, true); err != nil {
+		return err
+	}
+	return controller.clearPendingRadio()
+}
+
+// ForgetProfile removes preferences for a profile deleted from the eUICC.
+func (controller *Controller) ForgetProfile(profileID string) error {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	profiles := cloneProfiles(controller.profiles)
+	delete(profiles, profileID)
+	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: controller.settings, Profiles: profiles, ActiveProfileID: controller.activeProfileID, RadioPending: controller.radioPending}); err != nil {
+		return err
+	}
+	controller.profiles = profiles
+	return nil
 }
 
 // Restore reapplies the persisted airplane policy after modem initialization.
 func (controller *Controller) Restore(ctx context.Context) error {
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
+	if controller.radioPending {
+		return controller.restorePendingRadio(ctx)
+	}
 	return controller.applyRadio(ctx, controller.settings, true)
 }
 
@@ -86,7 +264,25 @@ func (controller *Controller) Restore(ctx context.Context) error {
 func (controller *Controller) Configure(ctx context.Context, update Update) (Settings, error) {
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
+	return controller.configure(ctx, controller.activeProfileID, update)
+}
+
+// ConfigureProfile stores an installed eSIM's preferences independently.
+func (controller *Controller) ConfigureProfile(ctx context.Context, profileID string, update Update) (Settings, error) {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if profileID == "" {
+		return Settings{}, errors.New("eSIM profile ID is required")
+	}
+	return controller.configure(ctx, profileID, update)
+}
+
+func (controller *Controller) configure(ctx context.Context, profileID string, update Update) (Settings, error) {
+	active := profileID == controller.activeProfileID
 	previous := controller.settings
+	if !active {
+		previous = controller.profileLocked(profileID)
+	}
 	next := previous
 	if update.DataEnabled != nil {
 		// The device does not open a SIM data session. Detaching packet service
@@ -105,22 +301,147 @@ func (controller *Controller) Configure(ctx context.Context, update Update) (Set
 	if update.VoLTEEnabled != nil {
 		next.VoLTEEnabled = *update.VoLTEEnabled
 	}
-	if previous.VoLTEEnabled != next.VoLTEEnabled {
-		if err := controller.applyVoLTE(ctx, next.VoLTEEnabled); err != nil {
+	if update.WiFiCallingEnabled != nil {
+		if *update.WiFiCallingEnabled && !controller.wifiCallingBackend {
+			return previous, errors.New("Wi-Fi Calling requires a device IMS backend")
+		}
+		next.WiFiCallingEnabled = *update.WiFiCallingEnabled
+	}
+	if !active && next.WiFiCallingStatus != "" {
+		next.WiFiCallingStatus = "inactive_profile"
+	}
+	if active {
+		if err := controller.applyTransition(ctx, previous, next); err != nil {
 			return previous, err
 		}
-	}
-	if err := controller.applyRadio(ctx, next, previous.AirplaneModeEnabled != next.AirplaneModeEnabled); err != nil {
-		return previous, err
 	}
 	if next == previous {
 		return next, nil
 	}
-	if err := save(controller.path, next); err != nil {
+	profiles := cloneProfiles(controller.profiles)
+	if profileID != "" {
+		profiles[profileID] = next
+	}
+	current := controller.settings
+	if active {
+		current = next
+	}
+	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: current, Profiles: profiles, ActiveProfileID: controller.activeProfileID, RadioPending: controller.radioPending}); err != nil {
 		return previous, err
 	}
-	controller.settings = next
+	controller.settings, controller.profiles = current, profiles
 	return next, nil
+}
+
+// ProbeWiFiCalling refreshes the device-side IMS status for the active SIM.
+// Without an IMS companion, the result is only an ePDG DNS diagnostic.
+func (controller *Controller) ProbeWiFiCalling(ctx context.Context, profileID string) (Settings, error) {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if profileID != controller.activeProfileID {
+		return controller.profileLocked(profileID), errors.New("eSIM profile is not active")
+	}
+	next := controller.settings
+	if controller.wifiCallingProbe != nil {
+		status, err := controller.wifiCallingProbe(ctx)
+		if err != nil {
+			status = "backend_unavailable"
+		}
+		next.WiFiCallingStatus = status
+	} else {
+		next.WiFiCallingStatus = controller.probeWiFiCalling(ctx)
+	}
+	if next == controller.settings {
+		return next, nil
+	}
+	profiles := cloneProfiles(controller.profiles)
+	if profileID != "" {
+		profiles[profileID] = next
+	}
+	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: next, Profiles: profiles, ActiveProfileID: controller.activeProfileID, RadioPending: controller.radioPending}); err != nil {
+		return controller.settings, err
+	}
+	controller.settings, controller.profiles = next, profiles
+	return next, nil
+}
+
+func (controller *Controller) profileLocked(profileID string) Settings {
+	if settings, ok := controller.profiles[profileID]; ok {
+		return settings
+	}
+	settings := defaultSettings()
+	settings.WiFiCallingAvailable = controller.wifiCallingBackend
+	return settings
+}
+
+func cloneProfiles(source map[string]Settings) map[string]Settings {
+	result := make(map[string]Settings, len(source))
+	for id, settings := range source {
+		result[id] = settings
+	}
+	return result
+}
+
+func (controller *Controller) applyTransition(ctx context.Context, previous, next Settings) error {
+	if previous.VoLTEEnabled != next.VoLTEEnabled {
+		if err := controller.applyVoLTE(ctx, next.VoLTEEnabled); err != nil {
+			return err
+		}
+	}
+	return controller.applyRadio(ctx, next, previous.AirplaneModeEnabled != next.AirplaneModeEnabled)
+}
+
+func (controller *Controller) probeWiFiCalling(ctx context.Context) string {
+	probeContext, cancel := context.WithTimeout(ctx, controller.timeout)
+	defer cancel()
+	response, err := controller.commander.Send(probeContext, "AT+CIMI")
+	if err != nil || !response.OK() {
+		return "probe_failed"
+	}
+	var imsi string
+	for _, line := range response.Lines {
+		candidate := strings.TrimSpace(line)
+		if len(candidate) >= 6 && len(candidate) <= 15 && allDigits(candidate) {
+			imsi = candidate
+			break
+		}
+	}
+	if imsi == "" {
+		return "probe_failed"
+	}
+	// MNC length is not reliably encoded in the IMSI. Query both candidates
+	// and report discovery only, never carrier authorization.
+	lookupFailed := false
+	for _, width := range []int{3, 2} {
+		mnc := imsi[3 : 3+width]
+		if width == 2 {
+			mnc = "0" + mnc
+		}
+		name := fmt.Sprintf("epdg.epc.mnc%s.mcc%s.pub.3gppnetwork.org", mnc, imsi[:3])
+		addresses, err := controller.lookupIP(probeContext, name)
+		if err == nil && len(addresses) != 0 {
+			return "gateway_found"
+		}
+		if err != nil {
+			var dnsError *net.DNSError
+			if !errors.As(err, &dnsError) || !dnsError.IsNotFound {
+				lookupFailed = true
+			}
+		}
+	}
+	if probeContext.Err() != nil || lookupFailed {
+		return "probe_failed"
+	}
+	return "gateway_not_found"
+}
+
+func allDigits(value string) bool {
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // RestartModem performs the full modem reset required after changing IMS configuration.
@@ -164,23 +485,27 @@ func (controller *Controller) send(ctx context.Context, command string) error {
 	return nil
 }
 
-func load(path string) (Settings, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return Settings{DataEnabled: true, IncomingCallsEnabled: true, IncomingSMSEnabled: true}, nil
-	}
-	if err != nil {
-		return Settings{}, fmt.Errorf("read slot policy: %w", err)
-	}
-	var persisted persistedSettings
-	if err := json.Unmarshal(data, &persisted); err != nil || persisted.Version != stateVersion {
-		return Settings{}, errors.New("persisted slot policy is invalid")
-	}
-	return persisted.Settings, nil
+func defaultSettings() Settings {
+	return Settings{DataEnabled: true, IncomingCallsEnabled: true, IncomingSMSEnabled: true}
 }
 
-func save(path string, settings Settings) error {
-	data, err := json.Marshal(persistedSettings{Version: stateVersion, Settings: settings})
+func load(path string) (persistedSettings, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return persistedSettings{Version: stateVersion, Settings: defaultSettings()}, nil
+	}
+	if err != nil {
+		return persistedSettings{}, fmt.Errorf("read slot policy: %w", err)
+	}
+	var persisted persistedSettings
+	if err := json.Unmarshal(data, &persisted); err != nil || (persisted.Version != 1 && persisted.Version != stateVersion) {
+		return persistedSettings{}, errors.New("persisted slot policy is invalid")
+	}
+	return persisted, nil
+}
+
+func save(path string, settings persistedSettings) error {
+	data, err := json.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("encode slot policy: %w", err)
 	}

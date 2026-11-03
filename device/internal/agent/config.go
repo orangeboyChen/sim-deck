@@ -70,6 +70,13 @@ type Config struct {
 	ServerURL             string
 	StateDirectory        string
 	AllowInsecureHTTP     bool
+	VoWiFiATBridge        bool
+	VoWiFiSIPRegistrar    string
+	VoWiFiSIPUsername     string
+	VoWiFiSIPPassword     string
+	VoWiFiSIPBindHost     string
+	VoWiFiSIPBindPort     int
+	VoWiFiMetricsURL      string
 }
 
 // LoadConfig reads agent configuration from an environment lookup function.
@@ -128,6 +135,35 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 			return Config{}, fmt.Errorf("SIM_DECK_ALLOW_INSECURE_HTTP must be a boolean")
 		}
 		config.AllowInsecureHTTP = allow
+	}
+	if value, ok := lookup("SIM_DECK_VOWIFI_AT_BRIDGE"); ok && strings.TrimSpace(value) != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("SIM_DECK_VOWIFI_AT_BRIDGE must be a boolean")
+		}
+		config.VoWiFiATBridge = enabled
+	}
+	config.VoWiFiSIPRegistrar = strings.TrimSpace(valueOrDefault(lookup, "SIM_DECK_VOWIFI_SIP_REGISTRAR", ""))
+	config.VoWiFiSIPUsername = strings.TrimSpace(valueOrDefault(lookup, "SIM_DECK_VOWIFI_SIP_USERNAME", ""))
+	config.VoWiFiSIPPassword = valueOrDefault(lookup, "SIM_DECK_VOWIFI_SIP_PASSWORD", "")
+	config.VoWiFiSIPBindHost = strings.TrimSpace(valueOrDefault(lookup, "SIM_DECK_VOWIFI_SIP_BIND_HOST", "127.0.0.1"))
+	config.VoWiFiMetricsURL = strings.TrimSpace(valueOrDefault(lookup, "SIM_DECK_VOWIFI_METRICS_URL", ""))
+	if value, ok := lookup("SIM_DECK_VOWIFI_SIP_BIND_PORT"); ok && strings.TrimSpace(value) != "" {
+		port, err := strconv.Atoi(value)
+		if err != nil || port < 0 || port > 65535 {
+			return Config{}, fmt.Errorf("SIM_DECK_VOWIFI_SIP_BIND_PORT must be a valid UDP port")
+		}
+		config.VoWiFiSIPBindPort = port
+	}
+	if config.VoWiFiSIPRegistrar != "" || config.VoWiFiSIPUsername != "" || config.VoWiFiSIPPassword != "" {
+		if config.VoWiFiSIPRegistrar == "" || config.VoWiFiSIPUsername == "" || config.VoWiFiSIPPassword == "" || config.VoWiFiSIPBindHost == "" {
+			return Config{}, fmt.Errorf("SIM_DECK_VOWIFI_SIP requires a registrar, username, password, and bind host")
+		}
+		if config.VoWiFiMetricsURL == "" {
+			return Config{}, fmt.Errorf("SIM_DECK_VOWIFI_METRICS_URL is required with a SIP gateway")
+		}
+	} else if config.VoWiFiMetricsURL != "" {
+		return Config{}, fmt.Errorf("SIM_DECK_VOWIFI_METRICS_URL requires a SIP gateway")
 	}
 
 	if value, ok := lookup("SIM_DECK_BAUD"); ok && strings.TrimSpace(value) != "" {

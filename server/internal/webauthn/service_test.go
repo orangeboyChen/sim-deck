@@ -8,6 +8,8 @@ import (
 	"time"
 
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
+
+	recordstore "sim-deck-server/internal/store"
 )
 
 type memoryStore struct {
@@ -18,6 +20,16 @@ type memoryStore struct {
 	credentialsError error
 	saveError        error
 	disableError     error
+}
+
+type memoryRecordStore struct {
+	*memoryStore
+	records []recordstore.WebAuthnCredentialRecord
+	err     error
+}
+
+func (store *memoryRecordStore) WebAuthnCredentialRecords(context.Context, string) ([]recordstore.WebAuthnCredentialRecord, error) {
+	return store.records, store.err
 }
 
 func (store *memoryStore) OwnerID(context.Context) (string, error) {
@@ -75,6 +87,51 @@ func TestNewUsesHostnameAsRPIDAndAcceptsNativeOrigin(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing native or API origin: %#v", want)
+	}
+}
+
+func TestListCredentialSummariesPreservesPasskeyTimestamps(t *testing.T) {
+	created := time.Date(2026, 10, 16, 1, 0, 0, 0, time.UTC)
+	used := created.Add(time.Hour)
+	ownerID := "01900000-0000-7000-8000-000000000001"
+	backend := &memoryRecordStore{
+		memoryStore: &memoryStore{owner: ownerID},
+		records: []recordstore.WebAuthnCredentialRecord{
+			{CreatedAt: created, LastUsedAt: &used},
+			{CreatedAt: used},
+		},
+	}
+	service, err := New(backend, "https://relay.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries, err := service.ListCredentialSummaries(context.Background(), ownerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 2 || !summaries[0].CreatedAt.Equal(created) || summaries[0].LastUsedAt == nil ||
+		!summaries[0].LastUsedAt.Equal(used) || !summaries[1].CreatedAt.Equal(used) || summaries[1].LastUsedAt != nil {
+		t.Fatalf("passkey summaries lost creation or last-used timestamps: %#v", summaries)
+	}
+
+	lookupError := errors.New("passkey records unavailable")
+	backend.err = lookupError
+	if _, err := service.ListCredentialSummaries(context.Background(), ownerID); !errors.Is(err, lookupError) {
+		t.Fatalf("expected record lookup failure, got %v", err)
+	}
+
+	legacy := &memoryStore{owner: ownerID, credentials: make([]webauthnlib.Credential, 2)}
+	legacyService, err := New(legacy, "https://relay.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries, err = legacyService.ListCredentialSummaries(context.Background(), ownerID)
+	if err != nil || len(summaries) != 2 {
+		t.Fatalf("legacy credential count was lost: summaries=%#v error=%v", summaries, err)
+	}
+	legacy.credentialsError = lookupError
+	if _, err := legacyService.ListCredentialSummaries(context.Background(), ownerID); !errors.Is(err, lookupError) {
+		t.Fatalf("expected legacy credential lookup failure, got %v", err)
 	}
 }
 

@@ -74,6 +74,7 @@ var _ = Describe("Agent configuration", func() {
 		Expect(config.RadioStatusPoll).To(Equal(15 * time.Second))
 		Expect(config.StateDirectory).To(Equal("/var/lib/sim-deck"))
 		Expect(config.AllowInsecureHTTP).To(BeFalse())
+		Expect(config.VoWiFiATBridge).To(BeFalse())
 	})
 
 	It("accepts an explicitly CA-authenticated TLS AT bridge", func() {
@@ -126,6 +127,12 @@ var _ = Describe("Agent configuration", func() {
 			"SIM_DECK_SERVER_URL":              "http://server:8080/",
 			"SIM_DECK_STATE_DIRECTORY":         "/tmp/state",
 			"SIM_DECK_ALLOW_INSECURE_HTTP":     "true",
+			"SIM_DECK_VOWIFI_AT_BRIDGE":        "true",
+			"SIM_DECK_VOWIFI_SIP_REGISTRAR":    "sip:127.0.0.1:5060",
+			"SIM_DECK_VOWIFI_SIP_USERNAME":     "simdeck",
+			"SIM_DECK_VOWIFI_SIP_PASSWORD":     "local-test",
+			"SIM_DECK_VOWIFI_SIP_BIND_PORT":    "5062",
+			"SIM_DECK_VOWIFI_METRICS_URL":      "http://127.0.0.1:9091/metrics",
 		}))
 
 		Expect(err).NotTo(HaveOccurred())
@@ -144,6 +151,13 @@ var _ = Describe("Agent configuration", func() {
 		Expect(config.ServerURL).To(Equal("http://server:8080"))
 		Expect(config.StateDirectory).To(Equal("/tmp/state"))
 		Expect(config.AllowInsecureHTTP).To(BeTrue())
+		Expect(config.VoWiFiATBridge).To(BeTrue())
+		Expect(config.VoWiFiSIPRegistrar).To(Equal("sip:127.0.0.1:5060"))
+		Expect(config.VoWiFiSIPUsername).To(Equal("simdeck"))
+		Expect(config.VoWiFiSIPPassword).To(Equal("local-test"))
+		Expect(config.VoWiFiSIPBindHost).To(Equal("127.0.0.1"))
+		Expect(config.VoWiFiSIPBindPort).To(Equal(5062))
+		Expect(config.VoWiFiMetricsURL).To(Equal("http://127.0.0.1:9091/metrics"))
 	})
 
 	DescribeTable("rejects invalid environment values",
@@ -163,6 +177,9 @@ var _ = Describe("Agent configuration", func() {
 		},
 		Entry("malformed device UUID", map[string]string{"SIM_DECK_DEVICE_UUID": "device-one"}, "DEVICE_UUID"),
 		Entry("invalid insecure HTTP flag", map[string]string{"SIM_DECK_ALLOW_INSECURE_HTTP": "perhaps"}, "ALLOW_INSECURE_HTTP"),
+		Entry("invalid IMS AT bridge flag", map[string]string{"SIM_DECK_VOWIFI_AT_BRIDGE": "perhaps"}, "VOWIFI_AT_BRIDGE"),
+		Entry("partial Wi-Fi Calling SIP settings", map[string]string{"SIM_DECK_VOWIFI_SIP_USERNAME": "simdeck"}, "VOWIFI_SIP"),
+		Entry("invalid Wi-Fi Calling SIP port", map[string]string{"SIM_DECK_VOWIFI_SIP_BIND_PORT": "99999"}, "VOWIFI_SIP_BIND_PORT"),
 		Entry("invalid baud", map[string]string{"SIM_DECK_BAUD": "fast"}, "BAUD"),
 		Entry("zero baud", map[string]string{"SIM_DECK_BAUD": "0"}, "BAUD"),
 		Entry("invalid command timeout", map[string]string{"SIM_DECK_COMMAND_TIMEOUT": "later"}, "COMMAND_TIMEOUT"),

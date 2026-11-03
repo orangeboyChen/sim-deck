@@ -7,19 +7,26 @@ import SwiftUI
 struct SlotSettingsScreen: View {
     let model: AppModel
     let line: DeviceLineIdentity
+    let profileID: String?
+    let profileName: String?
+    let isActiveProfile: Bool
 
     @Environment(\.dismiss) private var dismiss
     @State private var settings: SlotSettings?
     @State private var original: SlotSettings?
     @State private var isLoading = true
     @State private var isSaving = false
+    @State private var isProbing = false
     @State private var showsVoLTERestartConfirmation = false
     @State private var errorDescription: String?
 
-    init(model: AppModel, line: DeviceLineIdentity) {
+    init(model: AppModel, line: DeviceLineIdentity, profileID: String? = nil, profileName: String? = nil, isActiveProfile: Bool = true) {
         self.model = model
         self.line = line
-        let cached = model.slotSettingsByLineID[line.id]
+        self.profileID = profileID
+        self.profileName = profileName
+        self.isActiveProfile = isActiveProfile
+        let cached = profileID == nil ? model.slotSettingsByLineID[line.id] : nil
         _settings = State(initialValue: cached)
         _original = State(initialValue: cached)
         _isLoading = State(initialValue: cached == nil)
@@ -29,7 +36,13 @@ struct SlotSettingsScreen: View {
         Form {
             SlotIdentitySection(line: line)
             if let settings {
-                SlotControlSection(settings: binding(for: settings))
+                SlotControlSection(settings: binding(for: settings), isActiveProfile: isActiveProfile)
+                WiFiCallingSection(
+                    settings: binding(for: settings),
+                    canRefresh: isActiveProfile && settings == original && !isSaving && !isProbing,
+                    isProbing: isProbing,
+                    refresh: probeWiFiCalling
+                )
             } else if isLoading {
                 Section {
                     HStack {
@@ -43,7 +56,7 @@ struct SlotSettingsScreen: View {
                 SlotControlErrorSection(message: errorDescription, retry: load)
             }
         }
-        .navigationTitle(line.slotIndex.map { String(localized: "Slot \($0)") } ?? String(localized: "Slot"))
+        .navigationTitle(profileName ?? (line.slotIndex.map { String(localized: "Slot \($0)") } ?? String(localized: "Slot")))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
@@ -51,7 +64,7 @@ struct SlotSettingsScreen: View {
                     ProgressView()
                 } else {
                     Button("Save") {
-                        if settings?.volteEnabled != original?.volteEnabled {
+                        if isActiveProfile && settings?.volteEnabled != original?.volteEnabled {
                             showsVoLTERestartConfirmation = true
                         } else {
                             save(restartModem: false)
@@ -79,7 +92,7 @@ struct SlotSettingsScreen: View {
 
     private var canSave: Bool {
         guard let settings, let original else { return false }
-        return settings != original && !isSaving && line.isOnline
+        return settings != original && !isSaving && !isProbing && line.isOnline
     }
 
     private func binding(for value: SlotSettings) -> Binding<SlotSettings> {
@@ -94,7 +107,7 @@ struct SlotSettingsScreen: View {
     }
 
     private func loadSettings() async {
-        if let cached = model.slotSettingsByLineID[line.id] {
+        if profileID == nil, let cached = model.slotSettingsByLineID[line.id] {
             settings = cached
             original = cached
             isLoading = false
@@ -104,7 +117,12 @@ struct SlotSettingsScreen: View {
         isLoading = true
         errorDescription = nil
         do {
-            let loaded = try await model.loadSlotSettings(line: line)
+            let loaded: SlotSettings
+            if let profileID {
+                loaded = try await model.loadSlotSettings(line: line, profileID: profileID)
+            } else {
+                loaded = try await model.loadSlotSettings(line: line)
+            }
             settings = loaded
             original = loaded
         } catch {
@@ -119,7 +137,11 @@ struct SlotSettingsScreen: View {
             isSaving = true
             errorDescription = nil
             do {
-                _ = try await model.saveSlotSettings(settings, line: line)
+                if let profileID {
+                    _ = try await model.saveSlotSettings(settings, line: line, profileID: profileID)
+                } else {
+                    _ = try await model.saveSlotSettings(settings, line: line)
+                }
                 if restartModem {
                     try await model.restartSlotModem(line: line)
                 }
@@ -128,6 +150,22 @@ struct SlotSettingsScreen: View {
                 errorDescription = error.localizedDescription
                 isSaving = false
             }
+        }
+    }
+
+    private func probeWiFiCalling() {
+        guard isActiveProfile else { return }
+        Task {
+            isProbing = true
+            errorDescription = nil
+            do {
+                let checked = try await model.probeWiFiCalling(line: line, profileID: profileID)
+                settings = checked
+                original = checked
+            } catch {
+                errorDescription = error.localizedDescription
+            }
+            isProbing = false
         }
     }
 }
@@ -148,6 +186,7 @@ private struct SlotIdentitySection: View {
 
 struct SlotControlSection: View {
     @Binding var settings: SlotSettings
+    var isActiveProfile = true
 
     var body: some View {
         Section {
@@ -163,11 +202,58 @@ struct SlotControlSection: View {
         } header: {
             Text("Slot Controls")
         } footer: {
-            if settings.airplaneModeEnabled {
+            if !isActiveProfile {
+                Text("Preferences for this plan are saved on the device and applied when the plan is activated.")
+            } else if settings.airplaneModeEnabled {
                 Text("Airplane mode disables cellular data, incoming calls, and incoming SMS. Your individual choices are restored when airplane mode is turned off.")
             } else {
                 Text("These controls are end-to-end encrypted and applied directly by the modem device. VoLTE requires compatible modem firmware, carrier provisioning, and a modem restart after the setting changes.")
             }
+        }
+    }
+}
+
+struct WiFiCallingSection: View {
+    @Binding var settings: SlotSettings
+    let canRefresh: Bool
+    let isProbing: Bool
+    let refresh: () -> Void
+
+    var body: some View {
+        Section {
+            if settings.wifiCallingAvailable {
+                Toggle("Wi-Fi Calling", isOn: $settings.wifiCallingEnabled)
+            }
+            LabeledContent(settings.wifiCallingAvailable ? "IMS registration" : "Gateway check", value: statusDescription)
+            Button("Check Again", action: refresh)
+                .disabled(!canRefresh || (settings.wifiCallingAvailable && !settings.wifiCallingEnabled))
+        } header: {
+            Text("Wi-Fi Calling")
+        } footer: {
+            if settings.wifiCallingAvailable {
+                Text("Calls use Wi-Fi when carrier IMS is registered. Cellular calling remains available when Wi-Fi Calling is offline.")
+            } else {
+                Text("This device can check for a carrier gateway, but cannot yet register with carrier IMS over Wi-Fi. Calls still use the cellular modem.")
+            }
+        }
+    }
+
+    private var statusDescription: String {
+        if isProbing { return String(localized: "Checking…") }
+        if settings.wifiCallingAvailable && !settings.wifiCallingEnabled {
+            return String(localized: "Off")
+        }
+        switch settings.wifiCallingStatus {
+        case "ims_registered": return String(localized: "Registered over Wi-Fi")
+        case "ims_unregistered": return String(localized: "Not registered")
+        case "ims_transport_unavailable": return String(localized: "IMS transport unavailable")
+        case "ims_reconnecting": return String(localized: "Registering new SIM plan")
+        case "backend_unavailable": return String(localized: "IMS gateway unavailable")
+        case "inactive_profile": return String(localized: "Activate this plan to check")
+        case "gateway_found": return String(localized: "Gateway found; calling unavailable")
+        case "gateway_not_found": return String(localized: "No standard gateway found")
+        case "probe_failed": return String(localized: "Check failed")
+        default: return String(localized: "Not checked")
         }
     }
 }

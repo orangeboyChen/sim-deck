@@ -96,11 +96,19 @@ private final class PreviewSlotSettingsTransport: SlotSettingsTransport {
     }
 
     func load(line: DeviceLineIdentity) async throws -> SlotSettings { settings }
+    func load(line: DeviceLineIdentity, profileID: String?) async throws -> SlotSettings { settings }
 
     func update(_ settings: SlotSettings, line: DeviceLineIdentity) async throws -> SlotSettings {
         self.settings = settings
         return settings
     }
+
+    func update(_ settings: SlotSettings, line: DeviceLineIdentity, profileID: String?) async throws -> SlotSettings {
+        self.settings = settings
+        return settings
+    }
+
+    func probeWiFiCalling(line: DeviceLineIdentity, profileID: String?) async throws -> SlotSettings { settings }
 
     func restartModem(line: DeviceLineIdentity) async throws {}
 }

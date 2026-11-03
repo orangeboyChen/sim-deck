@@ -1,0 +1,553 @@
+package route
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"regexp"
+	"sync"
+	"time"
+
+	"sim-deck-device/internal/call"
+	"sim-deck-device/internal/media"
+)
+
+var numberPattern = regexp.MustCompile(`^\+?[0-9]{1,20}$`)
+
+// SIPCall is one call managed by the local IMS gateway.
+type SIPCall interface {
+	Number() string
+	Done() <-chan struct{}
+	PCM() media.DuplexPCM
+	Answer() error
+	Hangup(context.Context) error
+	SendDTMF(rune) error
+}
+
+// Line is the gateway interface accepted by Controller. Its incoming stream
+// uses callbacks so a SIP implementation can keep ownership of its dialog.
+type Line interface {
+	Run(context.Context) error
+	Registered() bool
+	IncomingCalls() <-chan SIPCall
+	DialCall(context.Context, string, func(int)) (SIPCall, error)
+	Close() error
+}
+
+type session struct {
+	call   SIPCall
+	cancel context.CancelFunc
+	ready  chan struct{}
+	err    error
+	mu     sync.Mutex
+	once   sync.Once
+}
+
+func (session *session) resolve(call SIPCall, err error) {
+	session.once.Do(func() {
+		session.mu.Lock()
+		session.call, session.err = call, err
+		session.mu.Unlock()
+		close(session.ready)
+	})
+}
+
+func (session *session) currentCall() SIPCall {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.call
+}
+
+func (session *session) endpoint(ctx context.Context, closed <-chan struct{}) (media.DuplexPCM, error) {
+	select {
+	case <-session.ready:
+	case <-closed:
+		return nil, io.ErrClosedPipe
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.err != nil {
+		return nil, session.err
+	}
+	if session.call == nil || session.call.PCM() == nil {
+		return nil, errors.New("SIP media is not active")
+	}
+	return session.call.PCM(), nil
+}
+
+// Controller routes a slot's calls through either cellular voice or its
+// registered Wi-Fi Calling gateway and emits a single call-state stream.
+type Controller struct {
+	cellular   *call.Controller
+	line       Line
+	newLine    func() (Line, error)
+	enabled    func() bool
+	lifetime   context.Context
+	restart    chan struct{}
+	retryDelay time.Duration
+
+	mu          sync.RWMutex
+	dispatchMu  sync.Mutex
+	active      *session
+	lastSIP     bool
+	snapshot    call.Snapshot
+	events      chan call.Snapshot
+	subscribers []chan call.Snapshot
+}
+
+func New(ctx context.Context, cellular *call.Controller, line Line, enabled func() bool) (*Controller, error) {
+	if ctx == nil || cellular == nil || line == nil || enabled == nil {
+		return nil, errors.New("call route requires a lifetime, cellular controller, SIP line, and policy")
+	}
+	return &Controller{cellular: cellular, line: line, enabled: enabled, lifetime: ctx,
+		snapshot: cellular.Snapshot(), events: make(chan call.Snapshot, 32), restart: make(chan struct{}, 1),
+		retryDelay: 5 * time.Second}, nil
+}
+
+// NewWithFactory recreates the local SIP registration after gateway failures
+// and eSIM profile changes while leaving cellular service running.
+func NewWithFactory(ctx context.Context, cellular *call.Controller, create func() (Line, error), enabled func() bool) (*Controller, error) {
+	if create == nil {
+		return nil, errors.New("SIP line factory is required")
+	}
+	line, err := create()
+	if err != nil {
+		return nil, err
+	}
+	controller, err := New(ctx, cellular, line, enabled)
+	if err != nil {
+		_ = line.Close()
+		return nil, err
+	}
+	controller.newLine = create
+	return controller, nil
+}
+
+func (controller *Controller) Events() <-chan call.Snapshot { return controller.events }
+
+func (controller *Controller) Subscribe() <-chan call.Snapshot {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	stream := make(chan call.Snapshot, 32)
+	controller.subscribers = append(controller.subscribers, stream)
+	return stream
+}
+
+func (controller *Controller) Snapshot() call.Snapshot {
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	return controller.snapshot
+}
+
+func (controller *Controller) State() call.State { return controller.Snapshot().State }
+
+func (controller *Controller) publishFor(item *session, snapshot call.Snapshot, cellular bool) {
+	controller.dispatchMu.Lock()
+	defer controller.dispatchMu.Unlock()
+	controller.publishForLocked(item, snapshot, cellular)
+}
+
+func (controller *Controller) publishForLocked(item *session, snapshot call.Snapshot, cellular bool) {
+	controller.mu.Lock()
+	if controller.active != item {
+		controller.mu.Unlock()
+		return
+	}
+	if cellular {
+		controller.lastSIP = false
+	}
+	if controller.snapshot == snapshot {
+		controller.mu.Unlock()
+		return
+	}
+	controller.snapshot = snapshot
+	subscribers := append([]chan call.Snapshot(nil), controller.subscribers...)
+	controller.mu.Unlock()
+	controller.events <- snapshot
+	for _, subscriber := range subscribers {
+		subscriber <- snapshot
+	}
+}
+
+// Run combines cellular events and SIP dialogs until the device stops.
+func (controller *Controller) Run(ctx context.Context) error {
+	cellularEvents := controller.cellular.Events()
+	line := controller.currentLine()
+	lineCancel, lineResult := runLine(ctx, line)
+	incomingCalls := line.IncomingCalls()
+	retry := time.NewTicker(controller.retryDelay)
+	defer retry.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			controller.endActive(context.WithoutCancel(ctx))
+			if line != nil {
+				lineCancel()
+				<-lineResult
+				_ = line.Close()
+			}
+			return ctx.Err()
+		case err := <-lineResult:
+			controller.endActive(context.WithoutCancel(ctx))
+			lineCancel()
+			_ = line.Close()
+			if controller.newLine == nil {
+				return fmt.Errorf("IMS gateway line stopped: %w", err)
+			}
+			slog.Warn("IMS gateway line stopped; retrying", "error", err)
+			controller.setLine(nil)
+			line = nil
+			lineResult = nil
+			incomingCalls = nil
+		case <-controller.restart:
+			controller.endActive(context.WithoutCancel(ctx))
+			lineCancel()
+			if line != nil {
+				<-lineResult
+				_ = line.Close()
+			}
+			controller.setLine(nil)
+			line = nil
+			lineResult = nil
+			incomingCalls = nil
+		case <-retry.C:
+			if line != nil || controller.newLine == nil {
+				continue
+			}
+			next, err := controller.newLine()
+			if err != nil {
+				slog.Warn("IMS gateway line retry failed", "error", err)
+				continue
+			}
+			line = next
+			controller.setLine(next)
+			lineCancel, lineResult = runLine(ctx, next)
+			incomingCalls = next.IncomingCalls()
+		case snapshot := <-cellularEvents:
+			controller.mu.RLock()
+			busy := controller.active != nil
+			controller.mu.RUnlock()
+			if !busy {
+				controller.publishFor(nil, snapshot, true)
+			} else if snapshot.State == call.StateRinging || snapshot.State == call.StateWaiting {
+				_ = controller.cellular.Reject(ctx)
+			}
+		case incoming := <-incomingCalls:
+			controller.mu.Lock()
+			if controller.active != nil || !controller.enabled() ||
+				(controller.cellular.State() != call.StateIdle && controller.cellular.State() != call.StateEnded) {
+				controller.mu.Unlock()
+				_ = incoming.Hangup(ctx)
+				continue
+			}
+			item := &session{call: incoming, ready: make(chan struct{})}
+			controller.active = item
+			controller.lastSIP = true
+			controller.mu.Unlock()
+			controller.publishFor(item, call.Snapshot{State: call.StateRinging, IncomingNumber: incoming.Number()}, false)
+			go controller.watch(item, incoming)
+		}
+	}
+}
+
+func runLine(ctx context.Context, line Line) (context.CancelFunc, <-chan error) {
+	lineContext, cancel := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	go func() {
+		defer cancel()
+		result <- line.Run(lineContext)
+	}()
+	return cancel, result
+}
+
+func (controller *Controller) currentLine() Line {
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	return controller.line
+}
+
+func (controller *Controller) setLine(line Line) {
+	controller.mu.Lock()
+	controller.line = line
+	controller.mu.Unlock()
+}
+
+func (controller *Controller) Dial(ctx context.Context, number string) error {
+	if controller.current() != nil {
+		return errors.New("Wi-Fi Calling call is already in progress")
+	}
+	if !controller.enabled() {
+		return controller.dialCellular(ctx, number)
+	}
+	line := controller.currentLine()
+	if line == nil || !line.Registered() {
+		return controller.dialCellular(ctx, number)
+	}
+	if controller.cellular.State() != call.StateIdle && controller.cellular.State() != call.StateEnded {
+		return errors.New("cellular call is already in progress")
+	}
+	if !numberPattern.MatchString(number) {
+		return errors.New("invalid phone number")
+	}
+	controller.mu.Lock()
+	if controller.active != nil {
+		controller.mu.Unlock()
+		return errors.New("Wi-Fi Calling call is already in progress")
+	}
+	dialContext, cancel := context.WithCancel(controller.lifetime)
+	item := &session{cancel: cancel, ready: make(chan struct{})}
+	controller.active = item
+	controller.lastSIP = true
+	controller.mu.Unlock()
+	controller.publishFor(item, call.Snapshot{State: call.StateDialing}, false)
+	go func() {
+		dialog, err := line.DialCall(dialContext, number, func(status int) {
+			if status == 180 || status == 183 {
+				controller.publishFor(item, call.Snapshot{State: call.StateDialing}, false)
+			}
+		})
+		if err != nil {
+			item.resolve(nil, err)
+			controller.finish(item)
+			return
+		}
+		controller.mu.RLock()
+		current := controller.active == item
+		controller.mu.RUnlock()
+		if !current {
+			_ = dialog.Hangup(context.Background())
+			return
+		}
+		item.resolve(dialog, nil)
+		controller.publishFor(item, call.Snapshot{State: call.StateActive, Active: true}, false)
+		controller.watch(item, dialog)
+	}()
+	return nil
+}
+
+func (controller *Controller) dialCellular(ctx context.Context, number string) error {
+	controller.mu.Lock()
+	controller.lastSIP = false
+	controller.mu.Unlock()
+	return controller.cellular.Dial(ctx, number)
+}
+
+func (controller *Controller) watch(item *session, dialog SIPCall) {
+	select {
+	case <-dialog.Done():
+	case <-controller.lifetime.Done():
+	}
+	controller.finish(item)
+}
+
+func (controller *Controller) finish(item *session) {
+	item.resolve(nil, io.ErrClosedPipe)
+	if item.cancel != nil {
+		item.cancel()
+	}
+	controller.dispatchMu.Lock()
+	defer controller.dispatchMu.Unlock()
+	controller.mu.Lock()
+	if controller.active != item {
+		controller.mu.Unlock()
+		return
+	}
+	controller.active = nil
+	controller.mu.Unlock()
+	snapshot := controller.cellular.Snapshot()
+	if snapshot.State == call.StateIdle || snapshot.State == call.StateEnded {
+		controller.publishForLocked(nil, call.Snapshot{State: call.StateEnded}, false)
+		return
+	}
+	controller.publishForLocked(nil, snapshot, true)
+}
+
+func (controller *Controller) current() *session {
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	return controller.active
+}
+
+func (controller *Controller) Answer(ctx context.Context) error {
+	item := controller.current()
+	if item == nil {
+		if controller.lastWasSIP() {
+			return errors.New("Wi-Fi Calling call has ended")
+		}
+		return controller.cellular.Answer(ctx)
+	}
+	dialog := item.currentCall()
+	if dialog == nil {
+		return errors.New("outgoing Wi-Fi Calling call cannot be answered locally")
+	}
+	if err := dialog.Answer(); err != nil {
+		controller.finish(item)
+		return err
+	}
+	item.resolve(dialog, nil)
+	controller.publishFor(item, call.Snapshot{State: call.StateActive, Active: true}, false)
+	return nil
+}
+
+func (controller *Controller) AnswerWaiting(ctx context.Context) error {
+	if controller.current() != nil {
+		return errors.New("Wi-Fi Calling does not support call waiting")
+	}
+	return controller.cellular.AnswerWaiting(ctx)
+}
+
+func (controller *Controller) Reject(ctx context.Context) error {
+	if controller.current() == nil {
+		if controller.lastWasSIP() {
+			return nil
+		}
+		return controller.cellular.Reject(ctx)
+	}
+	return controller.endActive(ctx)
+}
+
+func (controller *Controller) Hangup(ctx context.Context) error {
+	if controller.current() == nil {
+		if controller.lastWasSIP() {
+			return nil
+		}
+		return controller.cellular.Hangup(ctx)
+	}
+	return controller.endActive(ctx)
+}
+
+func (controller *Controller) lastWasSIP() bool {
+	controller.mu.RLock()
+	lastSIP := controller.lastSIP
+	controller.mu.RUnlock()
+	if !lastSIP {
+		return false
+	}
+	state := controller.cellular.State()
+	return state == call.StateIdle || state == call.StateEnded
+}
+
+func (controller *Controller) endActive(ctx context.Context) error {
+	item := controller.current()
+	if item == nil {
+		return nil
+	}
+	if item.cancel != nil {
+		item.cancel()
+	}
+	var err error
+	if dialog := item.currentCall(); dialog != nil {
+		err = dialog.Hangup(ctx)
+	}
+	controller.finish(item)
+	return err
+}
+
+// InvalidateProfile ends only the SIP call associated with a changed SIM
+// identity or profile. Cellular calls remain under the modem controller's ownership.
+func (controller *Controller) InvalidateProfile(ctx context.Context) error {
+	err := controller.endActive(ctx)
+	select {
+	case controller.restart <- struct{}{}:
+	default:
+	}
+	return err
+}
+
+func (controller *Controller) Refresh(ctx context.Context) error {
+	if controller.current() != nil {
+		return nil
+	}
+	return controller.cellular.Refresh(ctx)
+}
+
+func (controller *Controller) AddParticipant(ctx context.Context, number string) error {
+	if controller.current() != nil {
+		return errors.New("Wi-Fi Calling does not support adding participants")
+	}
+	return controller.cellular.AddParticipant(ctx, number)
+}
+
+func (controller *Controller) Merge(ctx context.Context) error {
+	if controller.current() != nil {
+		return errors.New("Wi-Fi Calling does not support merging calls")
+	}
+	return controller.cellular.Merge(ctx)
+}
+
+func (controller *Controller) Hold(ctx context.Context) error {
+	if controller.current() != nil {
+		return errors.New("Wi-Fi Calling does not support hold")
+	}
+	return controller.cellular.Hold(ctx)
+}
+
+func (controller *Controller) Resume(ctx context.Context) error {
+	if controller.current() != nil {
+		return errors.New("Wi-Fi Calling does not support resume")
+	}
+	return controller.cellular.Resume(ctx)
+}
+
+func (controller *Controller) Swap(ctx context.Context) error {
+	if controller.current() != nil {
+		return errors.New("Wi-Fi Calling does not support swap")
+	}
+	return controller.cellular.Swap(ctx)
+}
+
+func (controller *Controller) SendDTMF(ctx context.Context, digit string) error {
+	item := controller.current()
+	if item == nil {
+		return controller.cellular.SendDTMF(ctx, digit)
+	}
+	dialog := item.currentCall()
+	if len(digit) != 1 || dialog == nil || controller.State() != call.StateActive {
+		return errors.New("Wi-Fi Calling call is not active")
+	}
+	return dialog.SendDTMF(rune(digit[0]))
+}
+
+// OpenPCM returns the selected call's PCM endpoint. A SIP endpoint waits for
+// the remote answer, allowing WebRTC negotiation before SIP is established.
+func (controller *Controller) OpenPCM(ctx context.Context, cellular media.EndpointFactory) (media.DuplexPCM, error) {
+	item := controller.current()
+	if item == nil {
+		if controller.lastWasSIP() {
+			return nil, errors.New("Wi-Fi Calling call has ended")
+		}
+		return cellular(ctx)
+	}
+	return &deferredPCM{session: item, closed: make(chan struct{})}, nil
+}
+
+type deferredPCM struct {
+	session *session
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func (endpoint *deferredPCM) Read(p []byte) (int, error) {
+	pcm, err := endpoint.session.endpoint(context.Background(), endpoint.closed)
+	if err != nil {
+		return 0, err
+	}
+	return pcm.Read(p)
+}
+
+func (endpoint *deferredPCM) Write(p []byte) (int, error) {
+	pcm, err := endpoint.session.endpoint(context.Background(), endpoint.closed)
+	if err != nil {
+		return 0, err
+	}
+	return pcm.Write(p)
+}
+
+func (endpoint *deferredPCM) Close() error {
+	endpoint.once.Do(func() { close(endpoint.closed) })
+	return nil
+}

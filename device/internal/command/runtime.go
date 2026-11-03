@@ -72,6 +72,7 @@ type Payload struct {
 	IncomingCallsEnabled *bool              `json:"incoming_calls_enabled,omitempty"`
 	IncomingSMSEnabled   *bool              `json:"incoming_sms_enabled,omitempty"`
 	VoLTEEnabled         *bool              `json:"volte_enabled,omitempty"`
+	WiFiCallingEnabled   *bool              `json:"wifi_calling_enabled,omitempty"`
 	ESIMActivationCode   string             `json:"esim_activation_code,omitempty"`
 	ESIMProfileID        string             `json:"esim_profile_id,omitempty"`
 	ESIMProfileName      string             `json:"esim_profile_name,omitempty"`
@@ -166,17 +167,23 @@ type CallMedia interface {
 type SlotSettings interface {
 	Current() slotpolicy.Settings
 	Configure(context.Context, slotpolicy.Update) (slotpolicy.Settings, error)
+	Profile(string) slotpolicy.Settings
+	ConfigureProfile(context.Context, string, slotpolicy.Update) (slotpolicy.Settings, error)
+	SelectProfile(context.Context, string) error
+	ForgetProfile(string) error
+	ProbeWiFiCalling(context.Context, string) (slotpolicy.Settings, error)
 	RestartModem(context.Context) error
 }
 
 // Dependencies contains the endpoint capabilities used by the command runtime.
 type Dependencies struct {
-	Events       CallEventRegistrar
-	Media        CallMedia
-	Messages     Messages
-	ESIMProfiles ESIMProfiles
-	SlotSettings SlotSettings
-	Logger       *slog.Logger
+	Events        CallEventRegistrar
+	Media         CallMedia
+	Messages      Messages
+	ESIMProfiles  ESIMProfiles
+	ESIMSupported bool
+	SlotSettings  SlotSettings
+	Logger        *slog.Logger
 }
 
 // Runtime polls, decrypts, executes, and acknowledges commands for one modem.
@@ -190,6 +197,7 @@ type Runtime struct {
 	media           CallMedia
 	messages        Messages
 	esimProfiles    ESIMProfiles
+	esimSupported   bool
 	slotSettings    SlotSettings
 	now             func() time.Time
 	logger          *slog.Logger
@@ -218,8 +226,9 @@ func NewRuntime(remote Remote, state identity.State, calls Calls, pollInterval t
 	return &Runtime{
 		remote: remote, identity: state, calls: calls, pollInterval: pollInterval,
 		random: rand.Reader, events: dependencies.Events, media: dependencies.Media, messages: dependencies.Messages,
-		esimProfiles: dependencies.ESIMProfiles,
-		slotSettings: dependencies.SlotSettings, now: time.Now,
+		esimProfiles:  dependencies.ESIMProfiles,
+		esimSupported: dependencies.ESIMSupported,
+		slotSettings:  dependencies.SlotSettings, now: time.Now,
 		logger: logger,
 	}, nil
 }
@@ -368,6 +377,59 @@ type executionResult struct {
 	esimProfiles *[]ESIMProfile
 }
 
+func (runtime *Runtime) selectEnabledProfile(ctx context.Context, profiles []ESIMProfile) error {
+	activeID := ""
+	for _, profile := range profiles {
+		if profile.Enabled {
+			if activeID != "" {
+				return errors.New("multiple eSIM profiles are enabled")
+			}
+			activeID = profile.ProfileID
+		}
+	}
+	return runtime.slotSettings.SelectProfile(ctx, activeID)
+}
+
+func (runtime *Runtime) validateAndSelectProfile(ctx context.Context, profileID string) error {
+	if runtime.esimProfiles == nil {
+		return errESIMUnavailable
+	}
+	profiles, err := runtime.esimProfiles.ListESIMProfiles(ctx)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, profile := range profiles {
+		if profile.ProfileID == profileID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errESIMUnavailable
+	}
+	return runtime.selectEnabledProfile(ctx, profiles)
+}
+
+func (runtime *Runtime) selectCurrentProfile(ctx context.Context) (string, error) {
+	if runtime.esimProfiles == nil {
+		return "", errESIMUnavailable
+	}
+	profiles, err := runtime.esimProfiles.ListESIMProfiles(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := runtime.selectEnabledProfile(ctx, profiles); err != nil {
+		return "", err
+	}
+	for _, profile := range profiles {
+		if profile.Enabled {
+			return profile.ProfileID, nil
+		}
+	}
+	return "", errESIMUnavailable
+}
+
 func (runtime *Runtime) execute(ctx context.Context, payload Payload, senderInstallationID string) (executionResult, error) {
 	if payload.Version != protocolVersion {
 		return executionResult{}, errInvalidCommand
@@ -384,6 +446,9 @@ func (runtime *Runtime) execute(ctx context.Context, payload Payload, senderInst
 		if err != nil {
 			return executionResult{}, err
 		}
+		if err := runtime.selectEnabledProfile(ctx, profiles); err != nil {
+			return executionResult{}, err
+		}
 		return executionResult{esimProfiles: &profiles}, nil
 	case "esim.download":
 		if runtime.esimProfiles == nil || strings.TrimSpace(payload.ESIMActivationCode) == "" {
@@ -394,6 +459,9 @@ func (runtime *Runtime) execute(ctx context.Context, payload Payload, senderInst
 		}
 		profiles, err := runtime.esimProfiles.ListESIMProfiles(ctx)
 		if err != nil {
+			return executionResult{}, err
+		}
+		if err := runtime.selectEnabledProfile(ctx, profiles); err != nil {
 			return executionResult{}, err
 		}
 		return executionResult{esimProfiles: &profiles}, nil
@@ -419,15 +487,64 @@ func (runtime *Runtime) execute(ctx context.Context, payload Payload, senderInst
 		if err != nil {
 			return executionResult{}, err
 		}
+		if payload.Operation == "esim.delete" {
+			if err := runtime.slotSettings.ForgetProfile(profileID); err != nil {
+				return executionResult{}, err
+			}
+		}
+		if payload.Operation != "esim.rename" {
+			profiles, err := runtime.esimProfiles.ListESIMProfiles(ctx)
+			if err != nil {
+				return executionResult{}, err
+			}
+			if err := runtime.selectEnabledProfile(ctx, profiles); err != nil {
+				return executionResult{}, err
+			}
+		}
 		return executionResult{}, nil
 	case "slot.configure":
-		settings, err := runtime.slotSettings.Configure(ctx, slotpolicy.Update{
+		update := slotpolicy.Update{
 			DataEnabled:          payload.DataEnabled,
 			AirplaneModeEnabled:  payload.AirplaneModeEnabled,
 			IncomingCallsEnabled: payload.IncomingCallsEnabled,
 			IncomingSMSEnabled:   payload.IncomingSMSEnabled,
 			VoLTEEnabled:         payload.VoLTEEnabled,
-		})
+			WiFiCallingEnabled:   payload.WiFiCallingEnabled,
+		}
+		var settings slotpolicy.Settings
+		var err error
+		if payload.ESIMProfileID != "" {
+			if err = runtime.validateAndSelectProfile(ctx, payload.ESIMProfileID); err != nil {
+				return executionResult{}, err
+			}
+			settings, err = runtime.slotSettings.ConfigureProfile(ctx, payload.ESIMProfileID, update)
+		} else {
+			if runtime.esimSupported {
+				if _, err = runtime.selectCurrentProfile(ctx); err != nil {
+					return executionResult{}, err
+				}
+			}
+			settings, err = runtime.slotSettings.Configure(ctx, update)
+		}
+		if err != nil {
+			return executionResult{}, err
+		}
+		return executionResult{slotSettings: &settings}, nil
+	case "slot.probe_vowifi":
+		profileID := payload.ESIMProfileID
+		if payload.ESIMProfileID != "" {
+			if err := runtime.validateAndSelectProfile(ctx, payload.ESIMProfileID); err != nil {
+				return executionResult{}, err
+			}
+		}
+		if payload.ESIMProfileID == "" && runtime.esimSupported {
+			var err error
+			profileID, err = runtime.selectCurrentProfile(ctx)
+			if err != nil {
+				return executionResult{}, err
+			}
+		}
+		settings, err := runtime.slotSettings.ProbeWiFiCalling(ctx, profileID)
 		if err != nil {
 			return executionResult{}, err
 		}

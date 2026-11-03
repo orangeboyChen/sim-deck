@@ -147,6 +147,9 @@ struct SIMSettingsScreen: View {
     @State private var originalSlotSettings: SlotSettings?
     @State private var isLoadingControls = true
     @State private var isWorking = false
+    @State private var isProbingWiFiCalling = false
+    @State private var activeESIMProfileID: String?
+    @State private var activeESIMProfileName: String?
     @State private var showsVoLTERestartConfirmation = false
 
     init(model: AppModel, line: DeviceLineIdentity) {
@@ -184,9 +187,21 @@ struct SIMSettingsScreen: View {
                 } footer: {
                     Text("Manage the cellular profiles installed on this eSIM.")
                 }
+                if let activeESIMProfileName {
+                    Section("Current eSIM Plan") {
+                        LabeledContent("Plan", value: activeESIMProfileName)
+                    }
+                }
             }
             if let slotSettings {
                 SlotControlSection(settings: slotSettingsBinding(for: slotSettings))
+                WiFiCallingSection(
+                    settings: slotSettingsBinding(for: slotSettings),
+                    canRefresh: slotSettings == originalSlotSettings
+                        && !isWorking && !isProbingWiFiCalling && line.isOnline,
+                    isProbing: isProbingWiFiCalling,
+                    refresh: probeWiFiCalling
+                )
             } else if isLoadingControls {
                 Section("Slot Controls") {
                     HStack {
@@ -203,7 +218,7 @@ struct SIMSettingsScreen: View {
             }
             if let controlErrorDescription {
                 SlotControlErrorSection(message: controlErrorDescription) {
-                    Task { await loadSlotSettings() }
+                    Task { await reloadControls() }
                 }
             }
             Section("MMS") {
@@ -228,7 +243,9 @@ struct SIMSettingsScreen: View {
                 }
             }
         }
-        .task { await loadSlotSettings() }
+        .onAppear {
+            Task { await reloadControls() }
+        }
         .interactiveDismissDisabled(isWorking)
         .confirmationDialog(
             "Restart Modem to Apply VoLTE?",
@@ -253,12 +270,16 @@ struct SIMSettingsScreen: View {
     }
 
     private var canSave: Bool {
-        guard model.canEditDeviceProfiles, !isWorking else { return false }
-        let identityChanged = numericID != line.numericID
-            || lineName != line.lineName
-            || phoneNumber != line.phoneNumber
-        let controlsChanged = slotSettings != nil && slotSettings != originalSlotSettings
+        guard model.canEditDeviceProfiles, !isWorking, !isProbingWiFiCalling else { return false }
         return identityChanged || controlsChanged
+    }
+
+    private var identityChanged: Bool {
+        numericID != line.numericID || lineName != line.lineName || phoneNumber != line.phoneNumber
+    }
+
+    private var controlsChanged: Bool {
+        slotSettings != nil && slotSettings != originalSlotSettings
     }
 
     private func slotSettingsBinding(for value: SlotSettings) -> Binding<SlotSettings> {
@@ -268,8 +289,21 @@ struct SIMSettingsScreen: View {
         )
     }
 
+    private func reloadControls() async {
+        if line.simKind == .eSIM {
+            slotSettings = nil
+            originalSlotSettings = nil
+            isLoadingControls = line.isOnline
+            guard await loadActiveESIMProfile() else {
+                isLoadingControls = false
+                return
+            }
+        }
+        await loadSlotSettings()
+    }
+
     private func loadSlotSettings() async {
-        if let cached = model.slotSettingsByLineID[line.id] {
+        if line.simKind != .eSIM, let cached = model.slotSettingsByLineID[line.id] {
             slotSettings = cached
             originalSlotSettings = cached
             isLoadingControls = false
@@ -278,9 +312,19 @@ struct SIMSettingsScreen: View {
         }
         isLoadingControls = line.isOnline
         controlErrorDescription = nil
+        if line.simKind == .eSIM {
+            slotSettings = nil
+            originalSlotSettings = nil
+        }
         guard line.isOnline else { return }
         do {
-            let loaded = try await model.loadSlotSettings(line: line)
+            let loaded: SlotSettings
+            if line.simKind == .eSIM {
+                guard let activeESIMProfileID else { throw ActiveESIMPlanError.unavailable }
+                loaded = try await model.loadSlotSettings(line: line, profileID: activeESIMProfileID)
+            } else {
+                loaded = try await model.loadSlotSettings(line: line)
+            }
             slotSettings = loaded
             originalSlotSettings = loaded
         } catch {
@@ -289,14 +333,60 @@ struct SIMSettingsScreen: View {
         isLoadingControls = false
     }
 
+    private func loadActiveESIMProfile() async -> Bool {
+        activeESIMProfileID = nil
+        activeESIMProfileName = nil
+        do {
+            let profiles = try await model.loadESIMProfiles(line: line)
+            let active = profiles.first(where: \.isEnabled)
+            activeESIMProfileID = active?.profileID
+            activeESIMProfileName = active?.displayName
+            return true
+        } catch {
+            controlErrorDescription = error.localizedDescription
+            return false
+        }
+    }
+
+    private func probeWiFiCalling() {
+        Task {
+            isProbingWiFiCalling = true
+            controlErrorDescription = nil
+            do {
+                let checked = try await model.probeWiFiCalling(
+                    line: line,
+                    profileID: line.simKind == .eSIM ? activeESIMProfileID : nil
+                )
+                slotSettings = checked
+                originalSlotSettings = checked
+            } catch {
+                controlErrorDescription = error.localizedDescription
+            }
+            isProbingWiFiCalling = false
+        }
+    }
+
     private func save(restartModem: Bool) {
         Task {
             isWorking = true
             saveErrorDescription = nil
             do {
-                try await model.saveSIM(line: line, numericID: numericID, lineName: lineName, phoneNumber: phoneNumber)
-                if let slotSettings, slotSettings != originalSlotSettings {
-                    _ = try await model.saveSlotSettings(slotSettings, line: line)
+                if controlsChanged && line.simKind == .eSIM {
+                    try await confirmActiveESIMProfile()
+                }
+                if identityChanged {
+                    try await model.saveSIM(line: line, numericID: numericID, lineName: lineName, phoneNumber: phoneNumber)
+                }
+                if controlsChanged, let slotSettings {
+                    if line.simKind == .eSIM {
+                        guard let activeESIMProfileID else { throw ActiveESIMPlanError.unavailable }
+                        _ = try await model.saveSlotSettings(slotSettings, line: line, profileID: activeESIMProfileID)
+                    } else {
+                        _ = try await model.saveSlotSettings(slotSettings, line: line)
+                    }
+                    if line.simKind == .eSIM {
+                        try await confirmActiveESIMProfile()
+                    }
                     if restartModem {
                         try await model.restartSlotModem(line: line)
                     }
@@ -306,6 +396,28 @@ struct SIMSettingsScreen: View {
                 saveErrorDescription = error.localizedDescription
                 isWorking = false
             }
+        }
+    }
+
+    private func confirmActiveESIMProfile() async throws {
+        guard let activeESIMProfileID else { throw ActiveESIMPlanError.unavailable }
+        let profiles = try await model.loadESIMProfiles(line: line)
+        guard profiles.first(where: \.isEnabled)?.profileID == activeESIMProfileID else {
+            throw ActiveESIMPlanError.changed
+        }
+    }
+}
+
+private enum ActiveESIMPlanError: LocalizedError {
+    case unavailable
+    case changed
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            String(localized: "Activate an eSIM plan to load its SIM controls.")
+        case .changed:
+            String(localized: "The active eSIM plan changed. Reload SIM controls before saving.")
         }
     }
 }

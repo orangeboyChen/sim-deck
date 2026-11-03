@@ -1,0 +1,61 @@
+services:
+  modem:
+    image: "${SIM_DECK_DEVICE_IMAGE:-sim-deck/device:dev}"
+    build:
+      context: ..
+      dockerfile: device/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      SIM_DECK_SERVER_URL: "${SIM_DECK_SERVER_URL:?set SIM_DECK_SERVER_URL}"
+      SIM_DECK_AT_DEVICE: /dev/sim-deck/at
+      SIM_DECK_STATE_DIRECTORY: /var/lib/sim-deck
+      SIM_DECK_HEALTH_ADDRESS: 127.0.0.1:18081
+      SIM_DECK_VOWIFI_SIP_REGISTRAR: sip:127.0.0.1:5060
+      SIM_DECK_VOWIFI_SIP_USERNAME: simdeck
+      SIM_DECK_VOWIFI_SIP_PASSWORD: "${SIM_DECK_VOWIFI_SIP_PASSWORD:?set a local SIP password}"
+      SIM_DECK_VOWIFI_METRICS_URL: http://127.0.0.1:9091/metrics
+    devices:
+      - "${SIM_DECK_DEVICE_AT_DEVICE:?set the SimDeck AT port}:/dev/sim-deck/at"
+      - "${SIM_DECK_AUDIO_CONTROL_DEVICE:?set ALSA control device}:/dev/snd/controlC0"
+      - "${SIM_DECK_AUDIO_CAPTURE_DEVICE:?set ALSA capture device}:/dev/snd/pcmC0D0c"
+      - "${SIM_DECK_AUDIO_PLAYBACK_DEVICE:?set ALSA playback device}:/dev/snd/pcmC0D0p"
+    group_add:
+      - "${SIM_DECK_DIALOUT_GID:-20}"
+      - "${SIM_DECK_AUDIO_GID:-29}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    volumes:
+      - device-state:/var/lib/sim-deck
+
+  ims:
+    image: sim-deck/vowifi-companion:21f0747
+    build:
+      context: https://github.com/selvakn/gsm-sip-bridge.git#21f074750f7ed641ceb6303e9393384c8cc8f4d1
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 90s
+    network_mode: host
+    privileged: true
+    environment:
+      SIM_DECK_DEVICE_AT_DEVICE: "${SIM_DECK_DEVICE_AT_DEVICE:?set the SimDeck AT port}"
+      SIM_DECK_IMS_AT_DEVICE: "${SIM_DECK_IMS_AT_DEVICE:?set a different modem AT port}"
+      SIM_DECK_VOWIFI_SIP_PASSWORD: "${SIM_DECK_VOWIFI_SIP_PASSWORD:?set a local SIP password}"
+    entrypoint: ["/bin/bash", "/opt/sim-deck/vowifi-entrypoint.sh"]
+    volumes:
+      - /dev:/dev
+      - /sys:/sys:ro
+      - /var/run/netns:/var/run/netns:rshared
+      - device-state:/var/lib/sim-deck:ro
+      - ims-state:/data
+      - ./vowifi/entrypoint.sh:/opt/sim-deck/vowifi-entrypoint.sh:ro
+
+volumes:
+  device-state:
+  ims-state:
