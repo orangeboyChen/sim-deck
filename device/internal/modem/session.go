@@ -2,6 +2,9 @@ package modem
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	_ "embed"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
@@ -99,6 +102,15 @@ const (
 	esimTransactionTimeout   = 10 * time.Second
 	esimHTTPResponseLimit    = 2 << 20
 )
+
+// ChromiumOS Hermes includes this GSMA production RSP2 root at
+// https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/hermes/certs/prod/gsma-ci.pem.
+// SHA-256: 5E3E91FD454327C3AF5D32A7A73BBC59FE43AA7D85FD32D5DB44423F80A56BB3.
+//
+//go:embed certs/gsma-ci.pem
+var gsmaRSP2Root []byte
+
+var loadESIMHTTPClient = sync.OnceValues(esimHTTPClient)
 
 const defaultCallPollInterval = time.Second
 
@@ -458,7 +470,10 @@ func postESIMTransaction(ctx context.Context, endpoint, payload, fallbackSMDPHos
 	request.Header.Set("X-Admin-Protocol", "gsma/rsp/v2.2.0")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "gsma-rsp-lpad")
-	client := &http.Client{}
+	client, err := loadESIMHTTPClient()
+	if err != nil {
+		return nil, err
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
@@ -475,6 +490,19 @@ func postESIMTransaction(ctx context.Context, endpoint, payload, fallbackSMDPHos
 		return nil, errors.New("QESIM SMDP+ response is too large")
 	}
 	return dump, nil
+}
+
+func esimHTTPClient() (*http.Client, error) {
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("load system eSIM TLS roots: %w", err)
+	}
+	if !roots.AppendCertsFromPEM(gsmaRSP2Root) {
+		return nil, errors.New("load GSMA eSIM TLS root")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: roots}
+	return &http.Client{Transport: transport}, nil
 }
 
 func resolveESIMEndpoint(endpoint, payload, fallbackSMDPHost string) (string, error) {
