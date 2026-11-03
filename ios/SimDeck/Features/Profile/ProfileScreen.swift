@@ -16,6 +16,27 @@ struct ProfileScreen: View {
 
     var body: some View {
         List {
+            if !model.serverConnection.isSignedIn {
+                Section {
+                    NavigationLink {
+                        ServerSettingsScreen(model: model)
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Sign In with Passkey")
+                                    .font(.headline)
+                                Text("Connect to your server")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "person.badge.key.fill")
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                }
+            }
+
             SIMCardsSection(
                 model: model,
                 lines: model.devices.filter { $0.simID != nil },

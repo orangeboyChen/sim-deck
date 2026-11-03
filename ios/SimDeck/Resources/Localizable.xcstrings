@@ -876,7 +876,17 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "连接你的后台"
+            "value" : "连接你的服务器"
+          }
+        }
+      }
+    },
+    "Connect to your server" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接你的服务器"
           }
         }
       }
@@ -3111,7 +3121,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "后台"
+            "value" : "服务器"
           }
         }
       }
@@ -3201,6 +3211,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "使用通行密钥登录"
+          }
+        }
+      }
+    },
+    "Sign In with Password" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用密码登录"
           }
         }
       }
@@ -4231,6 +4251,36 @@
     },
     "Use QR Code" : {
 
+    },
+    "Use Admin Password" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用管理员密码"
+          }
+        }
+      }
+    },
+    "Use a passkey saved on this iPhone or in iCloud Keychain." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用这台 iPhone 或 iCloud 钥匙串中保存的通行密钥。"
+          }
+        }
+      }
+    },
+    "Use the admin password if you have not added a passkey yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果还没有添加通行密钥，请使用管理员密码。"
+          }
+        }
+      }
     },
     "Use unique device mappings and a unique state volume." : {
       "localizations" : {

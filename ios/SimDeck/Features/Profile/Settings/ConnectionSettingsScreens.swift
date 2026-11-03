@@ -12,7 +12,9 @@ struct ServerSettingsScreen: View {
     var body: some View {
         Form {
             ServerConnectionSection(model: model)
-            ServerVersionSection()
+            if model.serverConnection.isSignedIn {
+                ServerVersionSection()
+            }
         }
         .navigationTitle("Server")
         .scrollEdgeEffectStyle(.soft, for: .all)
@@ -24,6 +26,8 @@ private struct ServerConnectionSection: View {
     @Bindable private var connection: ServerConnectionManager
     @State private var password = ""
     @State private var isWorking = false
+    @State private var isSigningInWithPasskey = false
+    @State private var showsPasswordSignIn = false
     @State private var actionResult: LocalizedStringResource?
     @State private var actionError: String?
 
@@ -38,7 +42,11 @@ private struct ServerConnectionSection: View {
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .textContentType(.URL)
                 .disabled(connection.isSignedIn)
+                .onChange(of: connection.address) {
+                    actionError = nil
+                }
 
             ServerConnectionStatusRow("Status", state: connection.state)
 
@@ -52,26 +60,63 @@ private struct ServerConnectionSection: View {
                     Task { await signOut() }
                 }
                 .disabled(isWorking)
-            } else {
-                SecureField("Admin bootstrap password", text: $password)
+            }
+        }
 
+        if !connection.isSignedIn {
+            Section {
                 Button {
-                    Task { await signIn() }
+                    Task { await signInWithPasskey() }
                 } label: {
-                    if isWorking {
-                        ProgressView()
-                    } else {
-                        Text("Sign In")
+                    HStack(spacing: 10) {
+                        if isSigningInWithPasskey {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "person.badge.key")
+                        }
+                        Text("Sign In with Passkey")
                     }
+                    .frame(maxWidth: .infinity, minHeight: 44)
                 }
-                .disabled(!canSignIn)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!canSignInWithPasskey)
+                .listRowBackground(Color.clear)
+            } header: {
+                Text("Sign In")
+            } footer: {
+                Text("Use a passkey saved on this iPhone or in iCloud Keychain.")
             }
 
-            if let actionResult {
+            Section {
+                DisclosureGroup("Use Admin Password", isExpanded: $showsPasswordSignIn) {
+                    SecureField("Admin bootstrap password", text: $password)
+                        .textContentType(.password)
+
+                    Button {
+                        Task { await signIn() }
+                    } label: {
+                        if isWorking && !isSigningInWithPasskey {
+                            ProgressView()
+                        } else {
+                            Text("Sign In with Password")
+                        }
+                    }
+                    .disabled(!canSignIn)
+                }
+            } footer: {
+                Text("Use the admin password if you have not added a passkey yet.")
+            }
+        }
+
+        if let actionResult {
+            Section {
                 Text(actionResult)
                     .foregroundStyle(.green)
             }
-            if let actionError {
+        }
+        if let actionError {
+            Section {
                 Text(actionError)
                     .foregroundStyle(.red)
             }
@@ -79,9 +124,30 @@ private struct ServerConnectionSection: View {
     }
 
     private var canSignIn: Bool {
+        canSignInWithPasskey
+            && !password.isEmpty
+    }
+
+    private var canSignInWithPasskey: Bool {
         !isWorking
             && !connection.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !password.isEmpty
+    }
+
+    private func signInWithPasskey() async {
+        isWorking = true
+        isSigningInWithPasskey = true
+        actionResult = nil
+        actionError = nil
+        defer {
+            isSigningInWithPasskey = false
+            isWorking = false
+        }
+        do {
+            try await model.signInWithPasskey()
+            actionResult = "Connection succeeded"
+        } catch {
+            actionError = error.localizedDescription
+        }
     }
 
     private func signIn() async {
