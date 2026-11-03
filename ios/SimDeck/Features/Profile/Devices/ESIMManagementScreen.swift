@@ -310,6 +310,7 @@ private struct ESIMAddProfileSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var method: EntryMethod = .scan
     @State private var activationCode = ""
+    @State private var confirmationCode = ""
     @State private var isScannerPresented = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isWorking = false
@@ -357,6 +358,17 @@ private struct ESIMAddProfileSheet: View {
                     } footer: {
                         Text("Enter the activation code provided by your carrier.")
                     }
+
+                    Section {
+                        TextField("Optional", text: $confirmationCode)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .privacySensitive()
+                    } header: {
+                        Text("Confirmation Code")
+                    } footer: {
+                        Text("Enter the confirmation code if your carrier provided one.")
+                    }
                 }
 
                 if let errorDescription {
@@ -381,6 +393,7 @@ private struct ESIMAddProfileSheet: View {
             .sheet(isPresented: $isScannerPresented) {
                 ESIMScannerView { code in
                     activationCode = code
+                    confirmationCode = ""
                     method = .manual
                     isScannerPresented = false
                 }
@@ -403,6 +416,7 @@ private struct ESIMAddProfileSheet: View {
                 return
             }
             activationCode = code
+            confirmationCode = ""
             method = .manual
             errorDescription = nil
         } catch {
@@ -416,7 +430,12 @@ private struct ESIMAddProfileSheet: View {
         isWorking = true
         Task {
             do {
-                let profile = try await model.addESIMActivationCode(activationCode, line: line)
+                let code = confirmationCode.trimmingCharacters(in: .whitespacesAndNewlines)
+                let profile = try await model.addESIMActivationCode(
+                    activationCode,
+                    confirmationCode: code.isEmpty ? nil : code,
+                    line: line
+                )
                 onAdd(profile)
                 dismiss()
             } catch {

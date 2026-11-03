@@ -292,7 +292,7 @@ func (session *Session) RenameESIMProfile(ctx context.Context, iccid, nickname s
 // DownloadESIMProfile provisions a profile through Quectel's external-network
 // QESIM flow. The modem owns all eUICC state; this method only forwards the
 // modem's GSMA RSP messages to the advertised SMDP+ endpoint over HTTPS.
-func (session *Session) DownloadESIMProfile(ctx context.Context, activationCode string) error {
+func (session *Session) DownloadESIMProfile(ctx context.Context, activationCode, confirmationCode string) error {
 	var err error
 	activationCode, err = normalizeESIMActivationCode(activationCode)
 	if err != nil {
@@ -302,7 +302,11 @@ func (session *Session) DownloadESIMProfile(ctx context.Context, activationCode 
 	if err != nil {
 		return err
 	}
-	response, err := session.sendWithTimeout(ctx, fmt.Sprintf(`AT+QESIM="download","%s"`, escapeATString(activationCode)), esimTransactionTimeout)
+	command, err := esimDownloadCommand(activationCode, confirmationCode)
+	if err != nil {
+		return err
+	}
+	response, err := session.sendWithTimeout(ctx, command, esimTransactionTimeout)
 	if err != nil {
 		return fmt.Errorf("start eSIM download: %w", err)
 	}
@@ -336,6 +340,18 @@ func (session *Session) DownloadESIMProfile(ctx context.Context, activationCode 
 		}
 		transaction = next
 	}
+}
+
+func esimDownloadCommand(activationCode, confirmationCode string) (string, error) {
+	command := fmt.Sprintf(`AT+QESIM="download","%s"`, escapeATString(activationCode))
+	confirmationCode = strings.TrimSpace(confirmationCode)
+	if confirmationCode == "" {
+		return command, nil
+	}
+	if len(confirmationCode) > 128 || strings.ContainsAny(confirmationCode, "\r\n\"") {
+		return "", errors.New("invalid eSIM confirmation code")
+	}
+	return command + fmt.Sprintf(`,"%s"`, escapeATString(confirmationCode)), nil
 }
 
 // normalizeESIMActivationCode accepts both the full QR payload form

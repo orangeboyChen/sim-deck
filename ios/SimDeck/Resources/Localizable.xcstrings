@@ -845,6 +845,16 @@
         }
       }
     },
+    "Confirmation Code" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认码"
+          }
+        }
+      }
+    },
     "Configure a unique SIM_DECK_DEVICE_UUID for each modem container." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1499,6 +1509,16 @@
     },
     "Enter the activation code provided by your carrier." : {
 
+    },
+    "Enter the confirmation code if your carrier provided one." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果运营商提供了确认码，请在此输入。"
+          }
+        }
+      }
     },
     "eSIM" : {
 
@@ -2496,6 +2516,16 @@
     },
     "Operator" : {
 
+    },
+    "Optional" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可选"
+          }
+        }
+      }
     },
     "Other trusted iPhones are managed during installation approval." : {
 

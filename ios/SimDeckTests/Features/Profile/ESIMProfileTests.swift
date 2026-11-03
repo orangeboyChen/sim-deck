@@ -110,7 +110,7 @@ private final class FakeESIMDeviceTransport: ESIMDeviceProfileTransport {
     }
 
     func list(line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] { profiles }
-    func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] { [] }
+    func addActivationCode(_ code: String, confirmationCode: String?, line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] { [] }
     func setEnabled(_ enabled: Bool, profileID: String, line: DeviceLineIdentity) async throws {}
     func rename(_ name: String, profileID: String, line: DeviceLineIdentity) async throws {}
     func delete(profileID: String, line: DeviceLineIdentity) async throws {}

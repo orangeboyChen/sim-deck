@@ -42,7 +42,7 @@ final class ESIMDeviceTransportTests: XCTestCase {
         let vector = try XCTUnwrap(fixture.results.first { $0.name == "without_metadata" })
         let api = ESIMWireAPI(fixture: fixture, vector: vector)
         let profiles = try await makeTransport(api: api).addActivationCode(
-            "LPA:1$example.test$synthetic-code", line: line(fixture)
+            "LPA:1$example.test$synthetic-code", confirmationCode: "123456", line: line(fixture)
         )
         assertProfiles(profiles, for: vector.name)
     }

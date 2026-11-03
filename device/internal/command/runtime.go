@@ -73,6 +73,7 @@ type Payload struct {
 	IncomingSMSEnabled   *bool              `json:"incoming_sms_enabled,omitempty"`
 	VoLTEEnabled         *bool              `json:"volte_enabled,omitempty"`
 	ESIMActivationCode   string             `json:"esim_activation_code,omitempty"`
+	ESIMConfirmationCode string             `json:"esim_confirmation_code,omitempty"`
 	ESIMProfileID        string             `json:"esim_profile_id,omitempty"`
 	ESIMProfileName      string             `json:"esim_profile_name,omitempty"`
 	Attachment           *MessageAttachment `json:"attachment,omitempty"`
@@ -138,7 +139,7 @@ type Messages interface {
 // Quectel external-network LPA download flow.
 type ESIMProfiles interface {
 	ListESIMProfiles(context.Context) ([]ESIMProfile, error)
-	DownloadESIMProfile(context.Context, string) error
+	DownloadESIMProfile(context.Context, string, string) error
 	EnableESIMProfile(context.Context, string) error
 	DisableESIMProfile(context.Context, string) error
 	DeleteESIMProfile(context.Context, string) error
@@ -389,7 +390,7 @@ func (runtime *Runtime) execute(ctx context.Context, payload Payload, senderInst
 		if runtime.esimProfiles == nil || strings.TrimSpace(payload.ESIMActivationCode) == "" {
 			return executionResult{}, errESIMUnavailable
 		}
-		if err := runtime.esimProfiles.DownloadESIMProfile(ctx, payload.ESIMActivationCode); err != nil {
+		if err := runtime.esimProfiles.DownloadESIMProfile(ctx, payload.ESIMActivationCode, payload.ESIMConfirmationCode); err != nil {
 			return executionResult{}, err
 		}
 		profiles, err := runtime.esimProfiles.ListESIMProfiles(ctx)

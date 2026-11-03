@@ -83,6 +83,20 @@ var _ = Describe("Modem session", func() {
 		Expect(manual).To(Equal("LPA:1$prod.smdp-plus.rsp.goog$3TD6-8L82-HUE1-LVN6"))
 	})
 
+	It("adds the optional confirmation code to the QESIM download command", func() {
+		code := "LPA:1$example.test$synthetic-code"
+		withoutConfirmation, err := esimDownloadCommand(code, "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(withoutConfirmation).To(Equal(`AT+QESIM="download","LPA:1$example.test$synthetic-code"`))
+
+		withConfirmation, err := esimDownloadCommand(code, " 123456 ")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(withConfirmation).To(Equal(`AT+QESIM="download","LPA:1$example.test$synthetic-code","123456"`))
+
+		_, err = esimDownloadCommand(code, "123\rAT+QESIM")
+		Expect(err).To(MatchError("invalid eSIM confirmation code"))
+	})
+
 	It("extracts the SMDP+ host from a normalized activation code", func() {
 		host, err := smdpHostFromActivationCode("LPA:1$smdp.example.test$MATCHING-CODE")
 		Expect(err).NotTo(HaveOccurred())
@@ -433,7 +447,7 @@ var _ = Describe("Modem session", func() {
 					_, _ = modemTransport.Write([]byte("+CPIN: READY\r\nOK\r\n"))
 				case operatorSelectionQuery + "\r":
 					_, _ = modemTransport.Write([]byte("+COPS: 0,0,\"CHINA MOBILE\",7\r\nOK\r\n"))
-			case "AT+CCWA=1\r":
+				case "AT+CCWA=1\r":
 					_, _ = modemTransport.Write([]byte("+CME ERROR: no network service\r\n"))
 				case "AT+CMGL=4\r":
 					_, _ = modemTransport.Write([]byte("+CMGL: 1,0,,23\r\n" + testDeliverPDU + "\r\n+CMGL: 2,0,,1\r\nnot-hex\r\nOK\r\n"))
