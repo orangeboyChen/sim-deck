@@ -187,6 +187,7 @@ struct SIMSettingsScreen: View {
             }
             if let slotSettings {
                 SlotControlSection(settings: slotSettingsBinding(for: slotSettings))
+                DataAPNSection(settings: slotSettingsBinding(for: slotSettings))
             } else if isLoadingControls {
                 Section("Slot Controls") {
                     HStack {

@@ -698,6 +698,21 @@
         }
       }
     },
+    "China Mobile · cmnet" : {
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "中国移动 · cmnet" } }
+      }
+    },
+    "China Telecom · ctnet" : {
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "中国电信 · ctnet" } }
+      }
+    },
+    "China Unicom · 3gnet" : {
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "中国联通 · 3gnet" } }
+      }
+    },
     "Check for Device" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1038,6 +1053,16 @@
             "value" : "无法发起通话。"
           }
         }
+      }
+    },
+    "Custom" : {
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "自定义" } }
+      }
+    },
+    "Custom APN" : {
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "自定义 APN" } }
       }
     },
     "Data" : {
@@ -2079,6 +2104,11 @@
         }
       }
     },
+    "Mobile Data APN" : {
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "蜂窝数据 APN" } }
+      }
+    },
     "More" : {
 
     },
@@ -2954,6 +2984,11 @@
     },
     "Scan QR Code" : {
 
+    },
+    "Select the APN supplied by your carrier. Automatic uses a blank APN." : {
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请选择运营商提供的 APN。“自动”会使用空白 APN。" } }
+      }
     },
     "Search" : {
       "localizations" : {

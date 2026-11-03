@@ -146,6 +146,46 @@ var _ = Describe("Slot policy controller", func() {
 		Expect(reloaded.Current()).To(Equal(settings))
 	})
 
+	It("applies and restores the selected mobile data APN", func() {
+		controller, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		apn := "3gnet"
+		settings, err := controller.Configure(context.Background(), Update{DataAPN: &apn})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.DataAPN).To(Equal(apn))
+		Expect(settings.DataAPNConfigured).To(BeTrue())
+		Expect(commander.commands).To(Equal([]string{`AT+CGDCONT=1,"IPV4V6","3gnet"`}))
+
+		commander.commands = nil
+		reloaded, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reloaded.Restore(context.Background())).To(Succeed())
+		Expect(commander.commands).To(Equal([]string{`AT+CGDCONT=1,"IPV4V6","3gnet"`, "AT+CFUN=1"}))
+
+		commander.commands = nil
+		apn = ""
+		settings, err = reloaded.Configure(context.Background(), Update{DataAPN: &apn})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(settings.DataAPN).To(BeEmpty())
+		Expect(commander.commands).To(Equal([]string{`AT+CGDCONT=1,"IPV4V6",""`}))
+	})
+
+	It("rejects unsafe APNs and modem rejections without saving them", func() {
+		controller, err := NewController(directory, commander, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		unsafe := `evil";AT+CFUN=0`
+		_, err = controller.Configure(context.Background(), Update{DataAPN: &unsafe})
+		Expect(err).To(MatchError("invalid mobile data APN"))
+		Expect(commander.commands).To(BeEmpty())
+
+		commander.response = at.Response{Terminal: "ERROR"}
+		apn := "cmnet"
+		settings, err := controller.Configure(context.Background(), Update{DataAPN: &apn})
+		Expect(err).To(MatchError(ContainSubstring("modem rejected slot policy command")))
+		Expect(settings.DataAPNConfigured).To(BeFalse())
+		Expect(controller.Current().DataAPNConfigured).To(BeFalse())
+	})
+
 	It("does not rewrite state or touch the modem for an unchanged policy", func() {
 		controller, err := NewController(directory, commander, time.Second)
 		Expect(err).NotTo(HaveOccurred())

@@ -24,6 +24,7 @@ final class SlotSettingsTransportTests: XCTestCase {
         XCTAssertEqual(payload.slotID, slotID)
         XCTAssertEqual(payload.simID, simID)
         XCTAssertNil(payload.dataEnabled)
+        XCTAssertNil(payload.dataAPN)
         XCTAssertNil(payload.airplaneModeEnabled)
         XCTAssertNil(payload.incomingCallsEnabled)
         XCTAssertNil(payload.incomingSMSEnabled)
@@ -38,6 +39,8 @@ final class SlotSettingsTransportTests: XCTestCase {
         let transport = makeTransport(api: api)
         let requested = SlotSettings(
             dataEnabled: false,
+            dataAPN: "3gnet",
+            dataAPNConfigured: true,
             airplaneModeEnabled: true,
             incomingCallsEnabled: false,
             incomingSMSEnabled: false,
@@ -49,10 +52,26 @@ final class SlotSettingsTransportTests: XCTestCase {
         XCTAssertEqual(effective, api.settings)
         let payload = try XCTUnwrap(api.payloads.first)
         XCTAssertEqual(payload.dataEnabled, false)
+        XCTAssertEqual(payload.dataAPN, "3gnet")
         XCTAssertEqual(payload.airplaneModeEnabled, true)
         XCTAssertEqual(payload.incomingCallsEnabled, false)
         XCTAssertEqual(payload.incomingSMSEnabled, false)
         XCTAssertEqual(payload.volteEnabled, true)
+    }
+
+    func testAutomaticAPNIsSentAsAnExplicitEmptyValue() async throws {
+        let api = try SlotSettingsAPIFake(deviceID: deviceID)
+        let requested = SlotSettings(
+            dataEnabled: true,
+            dataAPNConfigured: true,
+            airplaneModeEnabled: false,
+            incomingCallsEnabled: true,
+            incomingSMSEnabled: true
+        )
+
+        _ = try await makeTransport(api: api).update(requested, line: line(commandKey: api.commandPublicKey))
+
+        XCTAssertEqual(api.payloads.first?.dataAPN, "")
     }
 
     func testLoadUsesFreshServerAssignmentInsteadOfStaleScreenIdentifiers() async throws {

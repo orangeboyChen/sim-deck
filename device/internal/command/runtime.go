@@ -68,6 +68,7 @@ type Payload struct {
 	MediaOffer           string             `json:"media_offer,omitempty"`
 	CallLeaseSeconds     int                `json:"call_lease_seconds,omitempty"`
 	DataEnabled          *bool              `json:"data_enabled,omitempty"`
+	DataAPN              *string            `json:"data_apn,omitempty"`
 	AirplaneModeEnabled  *bool              `json:"airplane_mode_enabled,omitempty"`
 	IncomingCallsEnabled *bool              `json:"incoming_calls_enabled,omitempty"`
 	IncomingSMSEnabled   *bool              `json:"incoming_sms_enabled,omitempty"`
@@ -423,6 +424,7 @@ func (runtime *Runtime) execute(ctx context.Context, payload Payload, senderInst
 	case "slot.configure":
 		settings, err := runtime.slotSettings.Configure(ctx, slotpolicy.Update{
 			DataEnabled:          payload.DataEnabled,
+			DataAPN:              payload.DataAPN,
 			AirplaneModeEnabled:  payload.AirplaneModeEnabled,
 			IncomingCallsEnabled: payload.IncomingCallsEnabled,
 			IncomingSMSEnabled:   payload.IncomingSMSEnabled,

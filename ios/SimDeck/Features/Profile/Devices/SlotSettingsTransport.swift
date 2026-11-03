@@ -7,6 +7,8 @@ import Foundation
 
 struct SlotSettings: Codable, Equatable, Sendable {
     var dataEnabled: Bool
+    var dataAPN: String
+    var dataAPNConfigured: Bool
     var airplaneModeEnabled: Bool
     var incomingCallsEnabled: Bool
     var incomingSMSEnabled: Bool
@@ -19,6 +21,8 @@ struct SlotSettings: Codable, Equatable, Sendable {
 
     init(
         dataEnabled: Bool,
+        dataAPN: String = "",
+        dataAPNConfigured: Bool = false,
         airplaneModeEnabled: Bool,
         incomingCallsEnabled: Bool,
         incomingSMSEnabled: Bool,
@@ -30,6 +34,8 @@ struct SlotSettings: Codable, Equatable, Sendable {
         mmsContextID: Int = 1
     ) {
         self.dataEnabled = dataEnabled
+        self.dataAPN = dataAPN
+        self.dataAPNConfigured = dataAPNConfigured
         self.airplaneModeEnabled = airplaneModeEnabled
         self.incomingCallsEnabled = incomingCallsEnabled
         self.incomingSMSEnabled = incomingSMSEnabled
@@ -44,6 +50,8 @@ struct SlotSettings: Codable, Equatable, Sendable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         dataEnabled = try container.decode(Bool.self, forKey: .dataEnabled)
+        dataAPN = try container.decodeIfPresent(String.self, forKey: .dataAPN) ?? ""
+        dataAPNConfigured = try container.decodeIfPresent(Bool.self, forKey: .dataAPNConfigured) ?? false
         airplaneModeEnabled = try container.decode(Bool.self, forKey: .airplaneModeEnabled)
         incomingCallsEnabled = try container.decode(Bool.self, forKey: .incomingCallsEnabled)
         incomingSMSEnabled = try container.decode(Bool.self, forKey: .incomingSMSEnabled)
@@ -65,6 +73,8 @@ struct SlotSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case dataEnabled = "data_enabled"
+        case dataAPN = "data_apn"
+        case dataAPNConfigured = "data_apn_configured"
         case airplaneModeEnabled = "airplane_mode_enabled"
         case incomingCallsEnabled = "incoming_calls_enabled"
         case incomingSMSEnabled = "incoming_sms_enabled"
@@ -183,6 +193,7 @@ final class LiveSlotSettingsTransport: SlotSettingsTransport {
             slotID: target.slotID,
             simID: target.simID,
             dataEnabled: settings?.dataEnabled,
+            dataAPN: settings.flatMap { $0.dataAPNConfigured ? $0.dataAPN : nil },
             airplaneModeEnabled: settings?.airplaneModeEnabled,
             incomingCallsEnabled: settings?.incomingCallsEnabled,
             incomingSMSEnabled: settings?.incomingSMSEnabled,
@@ -259,6 +270,7 @@ struct SlotSettingsCommandPayload: Codable, Equatable, Sendable {
     let slotID: UUID?
     let simID: UUID?
     let dataEnabled: Bool?
+    let dataAPN: String?
     let airplaneModeEnabled: Bool?
     let incomingCallsEnabled: Bool?
     let incomingSMSEnabled: Bool?
@@ -275,6 +287,7 @@ struct SlotSettingsCommandPayload: Codable, Equatable, Sendable {
         slotID: UUID?,
         simID: UUID?,
         dataEnabled: Bool?,
+        dataAPN: String? = nil,
         airplaneModeEnabled: Bool?,
         incomingCallsEnabled: Bool?,
         incomingSMSEnabled: Bool?,
@@ -290,6 +303,7 @@ struct SlotSettingsCommandPayload: Codable, Equatable, Sendable {
         self.slotID = slotID
         self.simID = simID
         self.dataEnabled = dataEnabled
+        self.dataAPN = dataAPN
         self.airplaneModeEnabled = airplaneModeEnabled
         self.incomingCallsEnabled = incomingCallsEnabled
         self.incomingSMSEnabled = incomingSMSEnabled
@@ -307,6 +321,7 @@ struct SlotSettingsCommandPayload: Codable, Equatable, Sendable {
         case slotID = "slot_id"
         case simID = "sim_id"
         case dataEnabled = "data_enabled"
+        case dataAPN = "data_apn"
         case airplaneModeEnabled = "airplane_mode_enabled"
         case incomingCallsEnabled = "incoming_calls_enabled"
         case incomingSMSEnabled = "incoming_sms_enabled"

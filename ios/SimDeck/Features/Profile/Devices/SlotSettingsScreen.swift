@@ -30,6 +30,7 @@ struct SlotSettingsScreen: View {
             SlotIdentitySection(line: line)
             if let settings {
                 SlotControlSection(settings: binding(for: settings))
+                DataAPNSection(settings: binding(for: settings))
             } else if isLoading {
                 Section {
                     HStack {
@@ -169,6 +170,64 @@ struct SlotControlSection: View {
                 Text("These controls are end-to-end encrypted and applied directly by the modem device. VoLTE requires compatible modem firmware, carrier provisioning, and a modem restart after the setting changes.")
             }
         }
+    }
+}
+
+struct DataAPNSection: View {
+    @Binding var settings: SlotSettings
+    @State private var customSelected: Bool
+
+    private static let presetValues = ["", "cmnet", "3gnet", "ctnet"]
+
+    init(settings: Binding<SlotSettings>) {
+        _settings = settings
+        _customSelected = State(initialValue: !Self.presetValues.contains(settings.wrappedValue.dataAPN))
+    }
+
+    var body: some View {
+        Section {
+            Picker("APN", selection: selection) {
+                Text("Automatic").tag("")
+                Text("China Mobile · cmnet").tag("cmnet")
+                Text("China Unicom · 3gnet").tag("3gnet")
+                Text("China Telecom · ctnet").tag("ctnet")
+                Text("Custom").tag("custom")
+            }
+            if customSelected {
+                TextField("Custom APN", text: customAPN)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+        } header: {
+            Text("Mobile Data APN")
+        } footer: {
+            Text("Select the APN supplied by your carrier. Automatic uses a blank APN.")
+        }
+    }
+
+    private var selection: Binding<String> {
+        Binding(
+            get: { customSelected ? "custom" : settings.dataAPN },
+            set: { value in
+                if value == "custom" {
+                    customSelected = true
+                } else {
+                    customSelected = false
+                    settings.dataAPN = value
+                    settings.dataAPNConfigured = true
+                }
+            }
+        )
+    }
+
+    private var customAPN: Binding<String> {
+        Binding(
+            get: { settings.dataAPN },
+            set: { value in
+                settings.dataAPN = value
+                settings.dataAPNConfigured = true
+            }
+        )
     }
 }
 

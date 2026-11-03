@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,16 +18,19 @@ const stateVersion = 1
 
 // Settings is the effective owner policy for one physical modem slot.
 type Settings struct {
-	DataEnabled          bool `json:"data_enabled"`
-	AirplaneModeEnabled  bool `json:"airplane_mode_enabled"`
-	IncomingCallsEnabled bool `json:"incoming_calls_enabled"`
-	IncomingSMSEnabled   bool `json:"incoming_sms_enabled"`
-	VoLTEEnabled         bool `json:"volte_enabled"`
+	DataEnabled          bool   `json:"data_enabled"`
+	DataAPN              string `json:"data_apn"`
+	DataAPNConfigured    bool   `json:"data_apn_configured,omitempty"`
+	AirplaneModeEnabled  bool   `json:"airplane_mode_enabled"`
+	IncomingCallsEnabled bool   `json:"incoming_calls_enabled"`
+	IncomingSMSEnabled   bool   `json:"incoming_sms_enabled"`
+	VoLTEEnabled         bool   `json:"volte_enabled"`
 }
 
 // Update contains optional policy changes from an authenticated encrypted command.
 type Update struct {
 	DataEnabled          *bool
+	DataAPN              *string
 	AirplaneModeEnabled  *bool
 	IncomingCallsEnabled *bool
 	IncomingSMSEnabled   *bool
@@ -75,10 +79,15 @@ func (controller *Controller) Current() Settings {
 	return controller.settings
 }
 
-// Restore reapplies the persisted airplane policy after modem initialization.
+// Restore reapplies the persisted modem policy after initialization.
 func (controller *Controller) Restore(ctx context.Context) error {
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
+	if controller.settings.DataAPNConfigured {
+		if err := controller.applyDataAPN(ctx, controller.settings.DataAPN); err != nil {
+			return err
+		}
+	}
 	return controller.applyRadio(ctx, controller.settings, true)
 }
 
@@ -92,6 +101,14 @@ func (controller *Controller) Configure(ctx context.Context, update Update) (Set
 		// The device does not open a SIM data session. Detaching packet service
 		// here would also disconnect IMS and break VoLTE calls.
 		next.DataEnabled = *update.DataEnabled
+	}
+	if update.DataAPN != nil {
+		apn := strings.TrimSpace(*update.DataAPN)
+		if !validDataAPN(apn) {
+			return previous, errors.New("invalid mobile data APN")
+		}
+		next.DataAPN = apn
+		next.DataAPNConfigured = true
 	}
 	if update.AirplaneModeEnabled != nil {
 		next.AirplaneModeEnabled = *update.AirplaneModeEnabled
@@ -107,6 +124,11 @@ func (controller *Controller) Configure(ctx context.Context, update Update) (Set
 	}
 	if previous.VoLTEEnabled != next.VoLTEEnabled {
 		if err := controller.applyVoLTE(ctx, next.VoLTEEnabled); err != nil {
+			return previous, err
+		}
+	}
+	if next.DataAPNConfigured && (!previous.DataAPNConfigured || previous.DataAPN != next.DataAPN) {
+		if err := controller.applyDataAPN(ctx, next.DataAPN); err != nil {
 			return previous, err
 		}
 	}
@@ -136,6 +158,24 @@ func (controller *Controller) applyVoLTE(ctx context.Context, enabled bool) erro
 		value = "1"
 	}
 	return controller.send(ctx, `AT+QCFG="ims",`+value)
+}
+
+func (controller *Controller) applyDataAPN(ctx context.Context, apn string) error {
+	return controller.send(ctx, fmt.Sprintf(`AT+CGDCONT=1,"IPV4V6","%s"`, apn))
+}
+
+func validDataAPN(apn string) bool {
+	if len(apn) > 100 {
+		return false
+	}
+	for _, char := range apn {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' ||
+			char >= '0' && char <= '9' || char == '.' || char == '-' || char == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (controller *Controller) applyRadio(ctx context.Context, settings Settings, airplaneChanged bool) error {

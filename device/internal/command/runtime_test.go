@@ -467,6 +467,7 @@ var _ = Describe("Encrypted command runtime", func() {
 
 	It("applies and returns slot policy only through the encrypted command", func() {
 		disabled, enabled := false, true
+		apn := "3gnet"
 		settings.settings = slotpolicy.Settings{
 			DataEnabled: false, AirplaneModeEnabled: true,
 			IncomingCallsEnabled: false, IncomingSMSEnabled: true,
@@ -474,6 +475,7 @@ var _ = Describe("Encrypted command runtime", func() {
 		payload := Payload{
 			Version: 1, Operation: "slot.configure",
 			DataEnabled: &disabled, AirplaneModeEnabled: &enabled,
+			DataAPN:              &apn,
 			IncomingCallsEnabled: &disabled, IncomingSMSEnabled: &enabled,
 			VoLTEEnabled: &enabled,
 		}
@@ -486,6 +488,8 @@ var _ = Describe("Encrypted command runtime", func() {
 		Expect(result.SlotSettings).To(Equal(&settings.settings))
 		Expect(settings.update.DataEnabled).NotTo(BeNil())
 		Expect(*settings.update.DataEnabled).To(BeFalse())
+		Expect(settings.update.DataAPN).NotTo(BeNil())
+		Expect(*settings.update.DataAPN).To(Equal(apn))
 		Expect(settings.update.AirplaneModeEnabled).NotTo(BeNil())
 		Expect(*settings.update.AirplaneModeEnabled).To(BeTrue())
 		Expect(settings.update.IncomingCallsEnabled).NotTo(BeNil())
