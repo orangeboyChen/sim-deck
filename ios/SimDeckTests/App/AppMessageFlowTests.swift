@@ -563,6 +563,48 @@ final class AppMessageFlowTests: XCTestCase {
         XCTAssertEqual(transport.synchronizedLineIDs, [[firstLine.id, secondLine.id]])
     }
 
+    func testForegroundRefreshSynchronizesHistoryWhileEventStreamIsRunning() async {
+        let transport = MessageTransportFake()
+        let model = makeModel(transport: transport, remoteDeviceRefreshEnabled: false)
+        model.startRealtimeUpdates()
+
+        await model.refreshForegroundState()
+        model.stopRealtimeUpdates()
+
+        XCTAssertEqual(transport.synchronizedLineIDs, [[firstLine.id, secondLine.id]])
+    }
+
+    func testDeviceStatusEventsUpdateOnlineStateAndIgnoreOlderEvents() async {
+        let transport = MessageTransportFake()
+        let model = makeModel(transport: transport, remoteDeviceRefreshEnabled: false)
+        transport.radioStatuses = [DetectedRadioStatus(
+            lineID: firstLine.id,
+            simID: firstLine.simID,
+            numericID: 1,
+            isOnline: false,
+            radioStatus: nil,
+            slotSettings: nil,
+            reportedAt: Date(timeIntervalSince1970: 200)
+        )]
+
+        await model.refreshMessages()
+        XCTAssertFalse(model.devices[0].isOnline)
+
+        transport.radioStatuses = [DetectedRadioStatus(
+            lineID: firstLine.id,
+            simID: firstLine.simID,
+            numericID: 1,
+            isOnline: true,
+            radioStatus: CellularRadioStatus(technology: .lte, signalBars: 4),
+            slotSettings: nil,
+            reportedAt: Date(timeIntervalSince1970: 100)
+        )]
+        await model.refreshMessages()
+
+        XCTAssertFalse(model.devices[0].isOnline)
+        XCTAssertNil(model.devices[0].radioStatus)
+    }
+
     func testSendDelegatesOfflineLineAvailabilityToServer() async {
         var offlineLine = firstLine
         offlineLine.isOnline = false
@@ -774,6 +816,7 @@ private final class MessageTransportFake: MessageTransport {
 
     var sendMode: SendMode
     var deliveries: [IncomingMessageDelivery]
+    var radioStatuses: [DetectedRadioStatus] = []
     private(set) var sent: [SentMessage] = []
     private(set) var routedLineIDs: [UUID] = []
     private(set) var synchronizedLineIDs: [[UUID]] = []
@@ -823,7 +866,7 @@ private final class MessageTransportFake: MessageTransport {
 
     func synchronize(lines: [DeviceLineIdentity]) async throws -> MessageSyncBatch {
         synchronizedLineIDs.append(lines.map(\.id))
-        return MessageSyncBatch(deliveries: deliveries, nextSequence: 7)
+        return MessageSyncBatch(deliveries: deliveries, detectedRadioStatuses: radioStatuses, nextSequence: 7)
     }
 
     func acknowledge(sequence: Int64) {

@@ -137,6 +137,10 @@ struct SIMSettingsScreen: View {
     let model: AppModel
     let line: DeviceLineIdentity
 
+    private var currentLine: DeviceLineIdentity {
+        model.devices.first { $0.id == line.id } ?? line
+    }
+
     @Environment(\.dismiss) private var dismiss
     @State private var numericID: Int
     @State private var lineName: String
@@ -196,7 +200,7 @@ struct SIMSettingsScreen: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-            } else if !line.isOnline {
+            } else if !currentLine.isOnline {
                 Section("Slot Controls") {
                     Label("This SIM is offline.", systemImage: "wifi.slash")
                         .foregroundStyle(.secondary)
@@ -277,9 +281,9 @@ struct SIMSettingsScreen: View {
             controlErrorDescription = nil
             return
         }
-        isLoadingControls = line.isOnline
+        isLoadingControls = currentLine.isOnline
         controlErrorDescription = nil
-        guard line.isOnline else { return }
+        guard currentLine.isOnline else { return }
         do {
             let loaded = try await model.loadSlotSettings(line: line)
             slotSettings = loaded

@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import Combine
 import Foundation
 import XCTest
 import RelayProtocol
@@ -68,6 +69,35 @@ final class ServerEventStreamTests: XCTestCase {
         XCTAssertEqual(stream.acknowledgedSequences, [42])
         XCTAssertTrue(stream.didClose)
         XCTAssertFalse(monitor.isRunning)
+    }
+
+    func testMessageMonitorPublishesSIMChangeOnlyAfterAcknowledgement() async {
+        let published = expectation(description: "SIM profile event published")
+        var acknowledged = false
+        let stream = MonitorEventStream(
+            pages: [Self.eventPage(sequence: 42, type: "sim.profile")],
+            onAcknowledge: { _ in acknowledged = true }
+        )
+        let opener = MonitorEventStreamOpener { _ in stream }
+        var cursor: Int64 = 41
+        let monitor = MessageEventMonitor(
+            opener: opener,
+            currentSequence: { cursor },
+            synchronizeThrough: { sequence in
+                cursor = sequence
+                return true
+            }
+        )
+        let subscription = monitor.synchronizedEventTypes.sink { types in
+            XCTAssertTrue(acknowledged)
+            XCTAssertEqual(types, ["sim.profile"])
+            published.fulfill()
+        }
+
+        monitor.start()
+        await fulfillment(of: [published], timeout: 1)
+        monitor.stop()
+        subscription.cancel()
     }
 
     func testMessageMonitorDoesNotAcknowledgeUnpersistedEvents() async {
@@ -252,13 +282,13 @@ final class ServerEventStreamTests: XCTestCase {
         return defaults
     }
 
-    private static func eventPage(sequence: Int64) -> EncryptedEventPage {
+    private static func eventPage(sequence: Int64, type: String = "message.received") -> EncryptedEventPage {
         EncryptedEventPage(
             events: [
                 EncryptedEventEnvelope(
                     id: UUID(uuidString: "01900000-0000-7000-8000-000000000011")!,
                     sequence: sequence,
-                    type: "message.received",
+                    type: type,
                     deviceUUID: UUID(uuidString: "01900000-0000-7000-8000-000000000001")!,
                     occurredAt: Date(timeIntervalSince1970: 1_792_109_000),
                     keyEpoch: 1,

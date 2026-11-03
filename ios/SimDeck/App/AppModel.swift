@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import Combine
 import Foundation
 import Observation
 import OSLog
@@ -63,6 +64,7 @@ final class AppModel {
     @ObservationIgnored private let callHistoryStore: EncryptedCallHistoryStore
     @ObservationIgnored private let remoteDeviceRefreshEnabled: Bool
     @ObservationIgnored private var messageEventMonitor: MessageEventMonitor?
+    @ObservationIgnored private var eventSubscription: AnyCancellable?
     @ObservationIgnored private var communicationSyncInFlight = false
     @ObservationIgnored private var communicationSyncWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored private var deviceStatusExpiryTasks: [UUID: Task<Void, Never>] = [:]
@@ -188,6 +190,14 @@ final class AppModel {
                 await resolvedServerConnection?.isReachable() ?? false
             }
         )
+        eventSubscription = messageEventMonitor?.synchronizedEventTypes
+            .filter { $0.contains("sim.profile") }
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    await self?.refreshDevices()
+                    await self?.refreshSIMCards()
+                }
+            }
     }
 
     func completeOnboarding() {
@@ -514,7 +524,6 @@ final class AppModel {
 
     func refreshForegroundState() async {
         refreshContactNames()
-        guard messageEventMonitor?.isRunning != true else { return }
         await refreshDevices()
         await refreshSIMCards()
         await refreshPasskeys()
@@ -1051,8 +1060,11 @@ final class AppModel {
         var routesChanged = false
         for status in statuses {
             guard let index = devices.firstIndex(where: { $0.id == status.lineID }) else { continue }
+            guard status.reportedAt > deviceStatusReportedAt[status.lineID, default: .distantPast] else { continue }
+            deviceStatusReportedAt[status.lineID] = status.reportedAt
             var line = devices[index]
             line.numericID = status.numericID
+            line.isOnline = status.isOnline
             line.radioStatus = status.isOnline ? status.radioStatus : nil
             devices[index] = line
             if let slotSettings = status.slotSettings {

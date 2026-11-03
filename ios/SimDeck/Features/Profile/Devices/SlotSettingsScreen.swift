@@ -8,6 +8,10 @@ struct SlotSettingsScreen: View {
     let model: AppModel
     let line: DeviceLineIdentity
 
+    private var currentLine: DeviceLineIdentity {
+        model.devices.first { $0.id == line.id } ?? line
+    }
+
     @Environment(\.dismiss) private var dismiss
     @State private var settings: SlotSettings?
     @State private var original: SlotSettings?
@@ -27,7 +31,7 @@ struct SlotSettingsScreen: View {
 
     var body: some View {
         Form {
-            SlotIdentitySection(line: line)
+            SlotIdentitySection(line: currentLine)
             if let settings {
                 SlotControlSection(settings: binding(for: settings))
                 DataAPNSection(settings: binding(for: settings))
@@ -80,7 +84,7 @@ struct SlotSettingsScreen: View {
 
     private var canSave: Bool {
         guard let settings, let original else { return false }
-        return settings != original && !isSaving && line.isOnline
+        return settings != original && !isSaving && currentLine.isOnline
     }
 
     private func binding(for value: SlotSettings) -> Binding<SlotSettings> {

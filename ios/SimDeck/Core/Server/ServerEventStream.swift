@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import Combine
 import Foundation
 import OSLog
 import Connect
@@ -120,6 +121,7 @@ final class MessageEventMonitor {
     private var receivedServerActivity = false
     private var missedHeartbeats = 0
     private var connectionIsDegraded = false
+    let synchronizedEventTypes = PassthroughSubject<Set<String>, Never>()
 
     init(
         opener: any EncryptedEventStreamOpening,
@@ -226,6 +228,7 @@ final class MessageEventMonitor {
                         throw ServerConnectionError.eventStreamUnavailable
                     }
                     try await stream.acknowledge(sequence: page.nextSequence)
+                    synchronizedEventTypes.send(Set(page.events.map(\.type)))
                     updateConnectionQuality(degraded: false)
                     Self.logger.debug(
                         "Acknowledged encrypted message events through sequence \(page.nextSequence, privacy: .public)"
