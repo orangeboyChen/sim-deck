@@ -226,7 +226,7 @@ struct WiFiCallingSection: View {
             }
             LabeledContent(settings.wifiCallingAvailable ? "IMS registration" : "Gateway check", value: statusDescription)
             Button("Check Again", action: refresh)
-                .disabled(!canRefresh)
+                .disabled(!canRefresh || (settings.wifiCallingAvailable && !settings.wifiCallingEnabled))
         } header: {
             Text("Wi-Fi Calling")
         } footer: {
@@ -240,6 +240,9 @@ struct WiFiCallingSection: View {
 
     private var statusDescription: String {
         if isProbing { return String(localized: "Checking…") }
+        if settings.wifiCallingAvailable && !settings.wifiCallingEnabled {
+            return String(localized: "Off")
+        }
         switch settings.wifiCallingStatus {
         case "ims_registered": return String(localized: "Registered over Wi-Fi")
         case "ims_unregistered": return String(localized: "Not registered")

@@ -46,8 +46,10 @@ This configuration is for one modem. A second modem needs its own ports,
 state volumes, SIP account, and IMS companion.
 
 In SIM Card settings, Wi-Fi Calling appears when the local SIP and companion
-status endpoints are configured. “Check Again” reads the companion's carrier
-IMS registration, ePDG transport, IPsec CHILD_SA, and Gm connection metrics.
+status endpoints are configured. Turning the setting on starts the companion;
+turning it off stops the Wi-Fi IMS registration. “Check Again” reads the
+companion's carrier IMS registration, ePDG transport, IPsec CHILD_SA, and Gm
+connection metrics.
 A registered local SIP account or an ePDG DNS result alone does not mark the
 carrier line ready. With the setting on, calls use Wi-Fi only while all four
 carrier metrics are healthy for one line; otherwise

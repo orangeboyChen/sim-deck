@@ -22,6 +22,14 @@ ports_share_modem() {
     [[ "$first" == "$second" ]]
 }
 
+wifi_calling_enabled() {
+    local policy=${1:-/var/lib/sim-deck/slot-policy.json}
+    local setting
+    # The device serializes active settings before inactive eSIM profiles.
+    setting=$(grep -Eo '"wifi_calling_enabled":[[:space:]]*(true|false)' "$policy" 2>/dev/null | head -n 1 || true)
+    [[ "$setting" == *true ]]
+}
+
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
     return 0
 fi
@@ -119,13 +127,17 @@ stop() {
 trap stop TERM INT
 
 while true; do
+    if ! wifi_calling_enabled; then
+        sleep 1
+        continue
+    fi
     before=$(cat "$generation" 2>/dev/null || true)
     /usr/local/bin/gsm-sip-bridge --config "$config" supervise &
     child=$!
     (
-        while sleep 2; do
+        while sleep 1; do
             now=$(cat "$generation" 2>/dev/null || true)
-            if [[ "$now" != "$before" ]]; then
+            if [[ "$now" != "$before" ]] || ! wifi_calling_enabled; then
                 kill -TERM "$child" 2>/dev/null || true
                 break
             fi

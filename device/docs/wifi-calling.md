@@ -11,7 +11,8 @@ preferences locally.
 Wi-Fi Calling appears as an enabled switch only when the device has the local
 SIP and IMS companion configuration described in
 [`deployment.md`](deployment.md#optional-wi-fi-calling-companion). Enabling it
-stores a preference; it does not claim carrier support. The device routes an
+starts the IMS companion for the active SIM; it does not claim carrier support.
+Disabling it stops the companion's Wi-Fi IMS registration. The device routes an
 outgoing call through Wi-Fi only when its local SIP account is registered and
 the companion reports one carrier line with all of these healthy:
 

@@ -30,4 +30,20 @@ if ports_share_modem /dev/ttyUSB1 /dev/ttyUSB4; then
     exit 1
 fi
 
-echo "VoWiFi AT port ownership checks passed"
+policy="$fixture/slot-policy.json"
+if wifi_calling_enabled "$policy"; then
+    echo "enabled IMS without a saved Wi-Fi Calling preference" >&2
+    exit 1
+fi
+printf '%s\n' '{"version":2,"wifi_calling_enabled":false,"profiles":{"inactive":{"wifi_calling_enabled":true}}}' > "$policy"
+if wifi_calling_enabled "$policy"; then
+    echo "enabled IMS from an inactive eSIM profile" >&2
+    exit 1
+fi
+printf '%s\n' '{"version":2,"wifi_calling_enabled":true,"profiles":{"inactive":{"wifi_calling_enabled":false}}}' > "$policy"
+if ! wifi_calling_enabled "$policy"; then
+    echo "ignored the active Wi-Fi Calling preference" >&2
+    exit 1
+fi
+
+echo "VoWiFi AT port ownership and preference checks passed"
