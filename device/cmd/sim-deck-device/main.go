@@ -547,6 +547,7 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 		return fmt.Errorf("open slot policy: %w", err)
 	}
 	var wifiMetrics *gateway.Metrics
+	var wifiCalls *route.Controller
 	if config.VoWiFiSIPRegistrar != "" {
 		wifiMetrics, err = gateway.NewMetrics(config.VoWiFiMetricsURL)
 		if err != nil {
@@ -556,6 +557,21 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 			SetWiFiCallingProbe(func(context.Context) (string, error))
 		}); ok {
 			probe.SetWiFiCallingProbe(wifiMetrics.Probe)
+		}
+		if changes, ok := policy.(interface{ SetProfileChanged(func(string)) }); ok {
+			changes.SetProfileChanged(func(string) {
+				wifiMetrics.Invalidate()
+				if writeError := gateway.RequestRestart(config.StateDirectory); writeError != nil {
+					logger.Error("failed to request IMS companion restart after eSIM profile change", "error", writeError)
+				}
+				if wifiCalls != nil {
+					go func() {
+						cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						_ = wifiCalls.InvalidateProfile(cleanup)
+					}()
+				}
+			})
 		}
 	}
 	inbox, err := dependencies.openInbox(
@@ -637,24 +653,6 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	}
 	if err := policy.Restore(ctx); err != nil {
 		return fmt.Errorf("restore slot policy: %w", err)
-	}
-	var wifiCalls *route.Controller
-	if wifiMetrics != nil {
-		if changes, ok := policy.(interface{ SetProfileChanged(func(string)) }); ok {
-			changes.SetProfileChanged(func(string) {
-				wifiMetrics.Invalidate()
-				if writeError := gateway.RequestRestart(config.StateDirectory); writeError != nil {
-					logger.Error("failed to request IMS companion restart after eSIM profile change", "error", writeError)
-				}
-				if wifiCalls != nil {
-					go func() {
-						cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-						defer cancel()
-						_ = wifiCalls.InvalidateProfile(cleanup)
-					}()
-				}
-			})
-		}
 	}
 	if slots, slotError := session.ReadSIMSlotStatus(ctx); slotError == nil {
 		logger.Info("SIM slot status detected", "slots", slots)
