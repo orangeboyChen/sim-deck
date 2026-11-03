@@ -53,6 +53,7 @@ type Controller struct {
 	settings           Settings
 	profiles           map[string]Settings
 	activeProfileID    string
+	radioPending       bool
 	lookupIP           func(context.Context, string) ([]net.IPAddr, error)
 	wifiCallingBackend bool
 	wifiCallingProbe   func(context.Context) (string, error)
@@ -88,6 +89,7 @@ type persistedSettings struct {
 	Settings
 	Profiles        map[string]Settings `json:"profiles,omitempty"`
 	ActiveProfileID string              `json:"active_profile_id,omitempty"`
+	RadioPending    bool                `json:"radio_pending,omitempty"`
 }
 
 // NewController opens the durable policy for one modem container.
@@ -138,7 +140,7 @@ func NewControllerWithWiFiCalling(directory string, commander Commander, timeout
 	}
 	return &Controller{path: path, commander: commander, timeout: timeout, settings: state.Settings,
 		profiles: state.Profiles, activeProfileID: state.ActiveProfileID, lookupIP: net.DefaultResolver.LookupIPAddr,
-		wifiCallingBackend: backend}, nil
+		wifiCallingBackend: backend, radioPending: state.RadioPending}, nil
 }
 
 // Current returns a consistent snapshot of the persisted owner policy.
@@ -175,7 +177,7 @@ func (controller *Controller) SelectProfile(ctx context.Context, profileID strin
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
 	if profileID == controller.activeProfileID {
-		return nil
+		return controller.restorePendingRadio(ctx)
 	}
 	previous := controller.settings
 	next := defaultSettings()
@@ -189,9 +191,6 @@ func (controller *Controller) SelectProfile(ctx context.Context, profileID strin
 	if profileID != "" && next.WiFiCallingStatus != "" {
 		next.WiFiCallingStatus = "not_checked"
 	}
-	if err := controller.applyTransition(ctx, previous, next); err != nil {
-		return err
-	}
 	profiles := cloneProfiles(controller.profiles)
 	if _, exists := profiles[controller.activeProfileID]; controller.activeProfileID != "" && controller.activeProfileID != profileID && exists {
 		inactive := previous
@@ -203,14 +202,39 @@ func (controller *Controller) SelectProfile(ctx context.Context, profileID strin
 	if profileID != "" {
 		profiles[profileID] = next
 	}
-	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: next, Profiles: profiles, ActiveProfileID: profileID}); err != nil {
+	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: next, Profiles: profiles, ActiveProfileID: profileID, RadioPending: true}); err != nil {
 		return err
 	}
-	controller.settings, controller.profiles, controller.activeProfileID = next, profiles, profileID
+	controller.settings, controller.profiles, controller.activeProfileID, controller.radioPending = next, profiles, profileID, true
 	if controller.profileChanged != nil {
 		controller.profileChanged(profileID)
 	}
+	if err := controller.applyTransition(ctx, previous, next); err != nil {
+		return err
+	}
+	return controller.clearPendingRadio()
+}
+
+func (controller *Controller) clearPendingRadio() error {
+	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: controller.settings,
+		Profiles: controller.profiles, ActiveProfileID: controller.activeProfileID}); err != nil {
+		return err
+	}
+	controller.radioPending = false
 	return nil
+}
+
+func (controller *Controller) restorePendingRadio(ctx context.Context) error {
+	if !controller.radioPending {
+		return nil
+	}
+	if err := controller.applyVoLTE(ctx, controller.settings.VoLTEEnabled); err != nil {
+		return err
+	}
+	if err := controller.applyRadio(ctx, controller.settings, true); err != nil {
+		return err
+	}
+	return controller.clearPendingRadio()
 }
 
 // ForgetProfile removes preferences for a profile deleted from the eUICC.
@@ -219,7 +243,7 @@ func (controller *Controller) ForgetProfile(profileID string) error {
 	defer controller.mu.Unlock()
 	profiles := cloneProfiles(controller.profiles)
 	delete(profiles, profileID)
-	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: controller.settings, Profiles: profiles, ActiveProfileID: controller.activeProfileID}); err != nil {
+	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: controller.settings, Profiles: profiles, ActiveProfileID: controller.activeProfileID, RadioPending: controller.radioPending}); err != nil {
 		return err
 	}
 	controller.profiles = profiles
@@ -230,6 +254,9 @@ func (controller *Controller) ForgetProfile(profileID string) error {
 func (controller *Controller) Restore(ctx context.Context) error {
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
+	if controller.radioPending {
+		return controller.restorePendingRadio(ctx)
+	}
 	return controller.applyRadio(ctx, controller.settings, true)
 }
 
@@ -299,7 +326,7 @@ func (controller *Controller) configure(ctx context.Context, profileID string, u
 	if active {
 		current = next
 	}
-	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: current, Profiles: profiles, ActiveProfileID: controller.activeProfileID}); err != nil {
+	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: current, Profiles: profiles, ActiveProfileID: controller.activeProfileID, RadioPending: controller.radioPending}); err != nil {
 		return previous, err
 	}
 	controller.settings, controller.profiles = current, profiles
@@ -331,7 +358,7 @@ func (controller *Controller) ProbeWiFiCalling(ctx context.Context, profileID st
 	if profileID != "" {
 		profiles[profileID] = next
 	}
-	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: next, Profiles: profiles, ActiveProfileID: controller.activeProfileID}); err != nil {
+	if err := save(controller.path, persistedSettings{Version: stateVersion, Settings: next, Profiles: profiles, ActiveProfileID: controller.activeProfileID, RadioPending: controller.radioPending}); err != nil {
 		return controller.settings, err
 	}
 	controller.settings, controller.profiles = next, profiles

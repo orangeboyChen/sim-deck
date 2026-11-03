@@ -97,6 +97,41 @@ var _ = Describe("Slot policy controller", func() {
 		Expect(commander.commands).To(BeEmpty())
 	})
 
+	It("invalidates the old IMS profile and persists the new one when radio setup fails", func() {
+		controller, err := NewControllerWithWiFiCalling(directory, commander, time.Second, true)
+		Expect(err).NotTo(HaveOccurred())
+		first, second := "89000000000000000001", "89000000000000000002"
+		Expect(controller.SelectProfile(context.Background(), first)).To(Succeed())
+		enabled := true
+		_, err = controller.Configure(context.Background(), Update{WiFiCallingEnabled: &enabled, VoLTEEnabled: &enabled})
+		Expect(err).NotTo(HaveOccurred())
+		var changed []string
+		controller.SetProfileChanged(func(profileID string) { changed = append(changed, profileID) })
+		commander.response = at.Response{Terminal: "+CME ERROR: 4"}
+
+		err = controller.SelectProfile(context.Background(), second)
+
+		Expect(err).To(HaveOccurred())
+		Expect(controller.Current().WiFiCallingEnabled).To(BeFalse())
+		Expect(controller.activeProfileID).To(Equal(second))
+		Expect(controller.radioPending).To(BeTrue())
+		Expect(changed).To(Equal([]string{second}))
+		_, err = controller.Configure(context.Background(), Update{WiFiCallingEnabled: &enabled})
+		Expect(err).NotTo(HaveOccurred())
+		disabled := false
+		_, err = controller.Configure(context.Background(), Update{WiFiCallingEnabled: &disabled})
+		Expect(err).NotTo(HaveOccurred())
+		reloaded, err := NewControllerWithWiFiCalling(directory, commander, time.Second, true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reloaded.Current().WiFiCallingEnabled).To(BeFalse())
+		Expect(reloaded.activeProfileID).To(Equal(second))
+		Expect(reloaded.radioPending).To(BeTrue())
+		commander.response = at.Response{Terminal: "OK"}
+		Expect(reloaded.Restore(context.Background())).To(Succeed())
+		Expect(reloaded.radioPending).To(BeFalse())
+		Expect(commander.commands).To(ContainElements(`AT+QCFG="ims",0`, "AT+CFUN=1"))
+	})
+
 	It("reports actual IMS companion registration when a backend probe is installed", func() {
 		controller, err := NewControllerWithWiFiCalling(directory, commander, time.Second, true)
 		Expect(err).NotTo(HaveOccurred())
