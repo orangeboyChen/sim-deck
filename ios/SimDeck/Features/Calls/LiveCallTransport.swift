@@ -611,10 +611,19 @@ final class LiveCallTransport: CallTransport, CallLineRouting, CallNetworkPathHa
                         }
                     case "dialing", "ringing":
                         markRinging(callID: callID)
+                    case "ended", "idle":
+                        finishRemoteCall(callID: callID)
+                        stopEventLoopIfIdle()
+                        return
                     default:
                         break
                     }
                 } catch {
+                    if case LiveCallTransportError.modemRejected("invalid_command") = error {
+                        finishRemoteCall(callID: callID)
+                        stopEventLoopIfIdle()
+                        return
+                    }
                     Self.logger.error(
                         "Active call lease renewal failed; call: \(callID.uuidString, privacy: .public), error: \(String(reflecting: error), privacy: .public)"
                     )
@@ -835,14 +844,7 @@ final class LiveCallTransport: CallTransport, CallLineRouting, CallNetworkPathHa
             case "active":
                 markConnected(callID: callID, at: envelope.occurredAt)
             case "ended":
-                let reason: CallEndReason = context.hasConnected ? .remoteEnded : .unanswered
-                stopCallLeaseRenewal(callID: callID)
-                stopMediaRestart(callID: callID)
-                stopMediaHealthMonitoring(callID: callID)
-                mediaSessions.removeValue(forKey: callID)?.close()
-                callEvents.removeValue(forKey: callID)
-                callLines.removeValue(forKey: callID)
-                eventHandler?(.ended(callID: callID, reason: reason))
+                finishRemoteCall(callID: callID)
             case "dialing", "held", "waiting":
                 break
             default:
@@ -858,6 +860,18 @@ final class LiveCallTransport: CallTransport, CallLineRouting, CallNetworkPathHa
         callEvents[callID] = context
         startMediaHealthMonitoring(callID: callID)
         eventHandler?(.connected(callID: callID, at: date))
+    }
+
+    private func finishRemoteCall(callID: UUID) {
+        guard let context = callEvents[callID] else { return }
+        let reason: CallEndReason = context.hasConnected ? .remoteEnded : .unanswered
+        stopCallLeaseRenewal(callID: callID)
+        stopMediaRestart(callID: callID)
+        stopMediaHealthMonitoring(callID: callID)
+        mediaSessions.removeValue(forKey: callID)?.close()
+        callEvents.removeValue(forKey: callID)
+        callLines.removeValue(forKey: callID)
+        eventHandler?(.ended(callID: callID, reason: reason))
     }
 
     private func markRinging(callID: UUID) {

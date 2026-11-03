@@ -841,6 +841,50 @@ final class LiveCallTransportTests: XCTestCase {
         XCTAssertEqual(api.payloads.map(\.operation), ["call.start", "call.heartbeat", "call.end"])
     }
 
+    func testHeartbeatEndsOutgoingCallAfterModemCallDisappears() async throws {
+        let api = try DeviceCommandAPIFake(deviceID: deviceID, outcome: .success)
+        api.heartbeatCallState = "ended"
+        let transport = LiveCallTransport(
+            api: api,
+            commandSigner: api.commandSigner,
+            makeMediaSession: { CallMediaSessionFake() },
+            automaticallyPollEvents: false,
+            automaticallyRenewCallLease: true
+        )
+        let ended = expectation(description: "Modem ended call is reflected locally")
+        transport.setEventHandler { event in
+            if event == .ended(callID: self.callID, reason: .unanswered) {
+                ended.fulfill()
+            }
+        }
+
+        try await transport.startOutgoingCall(callID: callID, number: "10086", lineID: deviceID)
+        await fulfillment(of: [ended], timeout: 1)
+        XCTAssertEqual(api.payloads.map(\.operation), ["call.start", "call.heartbeat"])
+    }
+
+    func testRejectedHeartbeatEndsCallWhenDeviceLeaseWasCleared() async throws {
+        let api = try DeviceCommandAPIFake(deviceID: deviceID, outcome: .success)
+        api.heartbeatErrorCode = "invalid_command"
+        let transport = LiveCallTransport(
+            api: api,
+            commandSigner: api.commandSigner,
+            makeMediaSession: { CallMediaSessionFake() },
+            automaticallyPollEvents: false,
+            automaticallyRenewCallLease: true
+        )
+        let ended = expectation(description: "Cleared device call lease is reflected locally")
+        transport.setEventHandler { event in
+            if event == .ended(callID: self.callID, reason: .unanswered) {
+                ended.fulfill()
+            }
+        }
+
+        try await transport.startOutgoingCall(callID: callID, number: "10086", lineID: deviceID)
+        await fulfillment(of: [ended], timeout: 1)
+        XCTAssertEqual(api.payloads.map(\.operation), ["call.start", "call.heartbeat"])
+    }
+
     func testHeartbeatReconcilesConnectedModemStateWhenCallEventWasMissed() async throws {
         let api = try DeviceCommandAPIFake(deviceID: deviceID, outcome: .success)
         let gate = CallLeaseRenewalGate()
@@ -1407,6 +1451,8 @@ private final class DeviceCommandAPIFake: EncryptedCallCommandAPI {
     }
 
     var callState: String
+    var heartbeatCallState: String?
+    var heartbeatErrorCode: String?
 
     func commandRecipient(deviceID: UUID) async throws -> Data {
         XCTAssertEqual(deviceID, self.deviceID)
@@ -1475,11 +1521,12 @@ private final class DeviceCommandAPIFake: EncryptedCallCommandAPI {
         let payload = try JSONDecoder().decode(CallCommandPayload.self, from: plaintext)
         payloads.append(payload)
 
+        let errorCode = payload.operation == "call.heartbeat" ? heartbeatErrorCode : nil
         let result = CallCommandResult(
             version: 1,
-            success: outcome != .modemRejected,
-            errorCode: outcome == .modemRejected ? "modem_rejected" : nil,
-            callState: callState,
+            success: outcome != .modemRejected && errorCode == nil,
+            errorCode: errorCode ?? (outcome == .modemRejected ? "modem_rejected" : nil),
+            callState: payload.operation == "call.heartbeat" ? (heartbeatCallState ?? callState) : callState,
             mediaAnswer: ["call.start", "call.answer", "call.media.restart"].contains(payload.operation) && !omitMediaAnswer
                 ? CallMediaSessionFake.answer
                 : nil
