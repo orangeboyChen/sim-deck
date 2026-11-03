@@ -269,6 +269,16 @@
         }
       }
     },
+    "Administrator password" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理员密码"
+          }
+        }
+      }
+    },
     "Advanced" : {
       "localizations" : {
         "zh-Hans" : {
@@ -816,6 +826,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "清除电话号码"
+          }
+        }
+      }
+    },
+    "Clear server address" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除服务器地址"
           }
         }
       }
@@ -3131,7 +3151,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "后台地址"
+            "value" : "服务器地址"
           }
         }
       }

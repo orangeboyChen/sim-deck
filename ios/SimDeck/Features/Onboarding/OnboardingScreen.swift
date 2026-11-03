@@ -110,6 +110,7 @@ private struct OnboardingServerPage: View {
     @Bindable private var connection: ServerConnectionManager
     @State private var password = ""
     @State private var signInMethod: SignInMethod?
+    @State private var showsPasswordSignIn = false
     @State private var errorMessage: String?
 
     private enum SignInMethod {
@@ -140,38 +141,56 @@ private struct OnboardingServerPage: View {
                     }
 
                 if !connection.isSignedIn {
-                    SecureField("Admin bootstrap password", text: $password)
-                        .textContentType(.password)
-
-                    Button {
-                        Task { await signInWithPassword() }
-                    } label: {
-                        if signInMethod == .password {
-                            ProgressView()
-                                .frame(maxWidth: .infinity)
-                        } else {
-                            Text("Sign In")
-                                .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(!canSignInWithPassword)
-
                     Button {
                         Task { await signInWithPasskey() }
                     } label: {
-                        if signInMethod == .passkey {
-                            ProgressView()
-                                .frame(maxWidth: .infinity)
-                        } else {
-                            Label("Sign In with Passkey", systemImage: "person.badge.key")
-                                .frame(maxWidth: .infinity)
+                        HStack(spacing: 10) {
+                            if signInMethod == .passkey {
+                                ProgressView()
+                                    .tint(.white)
+                            } else {
+                                Image(systemName: "person.badge.key")
+                            }
+                            Text("Sign In with Passkey")
                         }
+                        .frame(maxWidth: .infinity, minHeight: 52)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.roundedRectangle(radius: 16))
                     .disabled(!canSignInWithPasskey)
+
+                    Button {
+                        withAnimation { showsPasswordSignIn.toggle() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("Use Admin Password")
+                            Image(systemName: showsPasswordSignIn ? "chevron.up" : "chevron.down")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+
+                    if showsPasswordSignIn {
+                        SecureField("Administrator password", text: $password)
+                            .textContentType(.password)
+
+                        Button {
+                            Task { await signInWithPassword() }
+                        } label: {
+                            if signInMethod == .password {
+                                ProgressView()
+                                    .frame(maxWidth: .infinity, minHeight: 44)
+                            } else {
+                                Text("Sign In with Password")
+                                    .frame(maxWidth: .infinity, minHeight: 44)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.roundedRectangle(radius: 14))
+                        .disabled(!canSignInWithPassword)
+                    }
                 }
 
                 HStack(spacing: 8) {
