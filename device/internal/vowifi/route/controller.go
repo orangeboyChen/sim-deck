@@ -422,8 +422,13 @@ func (controller *Controller) Hangup(ctx context.Context) error {
 
 func (controller *Controller) lastWasSIP() bool {
 	controller.mu.RLock()
-	defer controller.mu.RUnlock()
-	return controller.lastSIP
+	lastSIP := controller.lastSIP
+	controller.mu.RUnlock()
+	if !lastSIP {
+		return false
+	}
+	state := controller.cellular.State()
+	return state == call.StateIdle || state == call.StateEnded
 }
 
 func (controller *Controller) endActive(ctx context.Context) error {

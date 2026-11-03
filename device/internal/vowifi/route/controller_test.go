@@ -316,6 +316,34 @@ func TestFinishedSIPCallPreservesConcurrentCellularCall(t *testing.T) {
 	}
 }
 
+func TestNewCellularCallCanBeAnsweredBeforeRouterConsumesItsEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	commander := &testCommander{}
+	cellular := call.NewController(commander)
+	line := &testLine{incoming: make(chan SIPCall, 1), registered: true}
+	controller, err := New(ctx, cellular, line, func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.lastSIP = true
+	if err := cellular.ApplyCLCC([]string{`+CLCC: 1,1,4,0,0,"10086",129`}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := controller.Answer(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Hangup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	commander.mu.Lock()
+	defer commander.mu.Unlock()
+	if len(commander.commands) != 2 || commander.commands[0] != "ATA" || commander.commands[1] != "ATH" {
+		t.Fatalf("cellular call actions were suppressed after SIP ended: %v", commander.commands)
+	}
+}
+
 func TestGatewayFailureDoesNotStopCellularAndReopensLine(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
