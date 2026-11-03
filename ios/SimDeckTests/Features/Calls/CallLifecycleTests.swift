@@ -398,7 +398,7 @@ final class CallLifecycleTests: XCTestCase {
 
         XCTAssertTrue(didFulfill)
         XCTAssertFalse(didFail)
-        XCTAssertEqual(coordinator.activeCall?.status, .ringing)
+        XCTAssertEqual(coordinator.activeCall?.status, .connecting)
         for _ in 0..<10 where !transport.isStartPending {
             await Task.yield()
         }

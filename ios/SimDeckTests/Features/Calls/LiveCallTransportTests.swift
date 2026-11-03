@@ -307,7 +307,7 @@ final class LiveCallTransportTests: XCTestCase {
         XCTAssertEqual(media.appliedAnswers, [CallMediaSessionFake.answer])
         XCTAssertEqual(media.muteChanges, [true, false])
         XCTAssertTrue(media.isClosed)
-        XCTAssertEqual(events, [.ringing(callID: callID)])
+        XCTAssertTrue(events.isEmpty)
 
         for request in api.requests {
             let encoded = try JSONEncoder().encode(request)
@@ -910,7 +910,6 @@ final class LiveCallTransportTests: XCTestCase {
         }
 
         XCTAssertEqual(events, [
-            .ringing(callID: callID),
             .connected(callID: callID, at: connectedAt),
         ])
         try await transport.endCall(callID: callID)
@@ -970,7 +969,7 @@ final class LiveCallTransportTests: XCTestCase {
 
         XCTAssertEqual(opener.requestedCursors, [0, 0, 0, 0])
         XCTAssertEqual(api.payloads.map(\.operation), ["call.start"])
-        XCTAssertEqual(events, [.ringing(callID: callID)])
+        XCTAssertTrue(events.isEmpty)
         XCTAssertFalse(media.isClosed)
         await transport.reset()
     }
@@ -1006,14 +1005,14 @@ final class LiveCallTransportTests: XCTestCase {
         await fulfillment(of: [firstOpened], timeout: 1)
         transport.networkPathDidChange(isAvailable: false)
         XCTAssertTrue(first.isClosed)
-        XCTAssertEqual(events, [.ringing(callID: callID)])
+        XCTAssertTrue(events.isEmpty)
         XCTAssertFalse(media.isClosed)
         XCTAssertEqual(opener.requestedCursors, [0])
 
         transport.networkPathDidChange(isAvailable: true)
         await fulfillment(of: [secondOpened], timeout: 1)
         XCTAssertEqual(opener.requestedCursors, [0, 0])
-        XCTAssertEqual(events, [.ringing(callID: callID)])
+        XCTAssertTrue(events.isEmpty)
         XCTAssertFalse(media.isClosed)
         await transport.reset()
     }
@@ -1059,7 +1058,7 @@ final class LiveCallTransportTests: XCTestCase {
 
         XCTAssertFalse(current.isClosed)
         XCTAssertFalse(media.isClosed)
-        XCTAssertEqual(events, [.ringing(callID: callID)])
+        XCTAssertTrue(events.isEmpty)
         await transport.reset()
     }
 
@@ -1080,7 +1079,7 @@ final class LiveCallTransportTests: XCTestCase {
 
         try await transport.synchronizeEvents()
 
-        XCTAssertEqual(events, [.ringing(callID: callID)])
+        XCTAssertTrue(events.isEmpty)
     }
 
     func testMissingMediaAnswerClosesLocalMediaAndEndsRemoteCall() async throws {

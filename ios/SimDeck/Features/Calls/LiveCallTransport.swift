@@ -247,7 +247,7 @@ final class LiveCallTransport: CallTransport, CallLineRouting, CallNetworkPathHa
             switch exchange.result.callState {
             case "active":
                 markConnected(callID: callID, at: now())
-            case "dialing", "ringing":
+            case "ringing":
                 markRinging(callID: callID)
             default:
                 break
@@ -609,7 +609,7 @@ final class LiveCallTransport: CallTransport, CallLineRouting, CallNetworkPathHa
                             )
                             markConnected(callID: callID, at: now())
                         }
-                    case "dialing", "ringing":
+                    case "ringing":
                         markRinging(callID: callID)
                     case "ended", "idle":
                         finishRemoteCall(callID: callID)

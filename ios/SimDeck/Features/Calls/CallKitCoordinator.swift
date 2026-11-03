@@ -422,7 +422,7 @@ final class CallKitCoordinator: NSObject, CallStarting, CallControlling, Incomin
             if reportToCallKit {
                 try configureAudioSession()
             }
-            activeCall?.status = .ringing
+            activeCall?.status = .connecting
             if reportToCallKit {
                 provider.reportOutgoingCall(with: request.callID, startedConnectingAt: .now)
             }
@@ -511,7 +511,7 @@ final class CallKitCoordinator: NSObject, CallStarting, CallControlling, Incomin
         // CallKit actions have a short system deadline. Accept the transaction
         // before the encrypted command and WebRTC negotiation cross the network.
         if activeCall?.id == callID {
-            activeCall?.status = .ringing
+            activeCall?.status = .connecting
         }
         fulfill()
         Task {
