@@ -635,7 +635,11 @@ func (runtime *Runtime) expireCallLease() error {
 		return nil
 	}
 	if state := runtime.calls.State(); state == call.StateIdle || state == call.StateEnded {
+		callID := runtime.activeCallLease.callID
 		runtime.activeCallLease = nil
+		if err := runtime.media.Stop(callID); err != nil {
+			return fmt.Errorf("stop media after cellular call ended: %w", err)
+		}
 		return nil
 	}
 	if runtime.now().Before(runtime.activeCallLease.expiresAt) {

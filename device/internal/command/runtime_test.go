@@ -180,6 +180,7 @@ type fakeCallMedia struct {
 	offer        string
 	answer       string
 	negotiateErr error
+	stopErr      error
 	restarted    bool
 	stopped      []string
 	sequence     *[]string
@@ -293,7 +294,7 @@ func (media *fakeCallMedia) Renegotiate(_ context.Context, callID string, offer 
 
 func (media *fakeCallMedia) Stop(callID string) error {
 	media.stopped = append(media.stopped, callID)
-	return nil
+	return media.stopErr
 }
 
 var _ = Describe("Encrypted command runtime", func() {
@@ -824,6 +825,34 @@ var _ = Describe("Encrypted command runtime", func() {
 		Expect(calls.operations).To(Equal([]string{"hangup"}))
 		Expect(media.stopped).To(Equal([]string{"call-1"}))
 		Expect(events.unregistered).To(Equal("call-1"))
+		Expect(runtime.activeCallLease).To(BeNil())
+	})
+
+	It("releases media when the modem ends a call before its lease expires", func() {
+		runtime.activeCallLease = &callLease{
+			callID: "call-1", senderInstallationID: testInstallationID,
+			duration: defaultCallLease, expiresAt: time.Now().Add(defaultCallLease),
+		}
+		calls.state = call.StateEnded
+
+		Expect(runtime.expireCallLease()).To(Succeed())
+
+		Expect(calls.operations).To(BeEmpty())
+		Expect(media.stopped).To(Equal([]string{"call-1"}))
+		Expect(events.unregistered).To(BeEmpty())
+		Expect(runtime.activeCallLease).To(BeNil())
+	})
+
+	It("reports a media close failure after the modem ends a call", func() {
+		runtime.activeCallLease = &callLease{
+			callID: "call-1", senderInstallationID: testInstallationID,
+			duration: defaultCallLease, expiresAt: time.Now().Add(defaultCallLease),
+		}
+		calls.state = call.StateEnded
+		media.stopErr = errors.New("audio process did not close")
+
+		Expect(runtime.expireCallLease()).To(MatchError("stop media after cellular call ended: audio process did not close"))
+		Expect(media.stopped).To(Equal([]string{"call-1"}))
 		Expect(runtime.activeCallLease).To(BeNil())
 	})
 
