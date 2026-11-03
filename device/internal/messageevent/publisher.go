@@ -123,6 +123,7 @@ type Remote interface {
 type Publisher struct {
 	remote   Remote
 	identity identity.State
+	now      func() time.Time
 }
 
 // NewPublisher creates an incoming message publisher for one bound modem.
@@ -131,7 +132,7 @@ func NewPublisher(remote Remote, state identity.State) (*Publisher, error) {
 		len(state.CommandPrivateKey) != keyBytes || len(state.IdentityPrivateKey) != ed25519.PrivateKeySize {
 		return nil, errors.New("message event publisher requires a bound device identity and remote")
 	}
-	return &Publisher{remote: remote, identity: state}, nil
+	return &Publisher{remote: remote, identity: state, now: time.Now}, nil
 }
 
 // Publish seals and uploads a deterministic idempotent event for every approved installation.
@@ -338,7 +339,7 @@ func (publisher *Publisher) seal(message sms.ReceivedMessage, recipient incoming
 	envelope := callevent.Envelope{
 		ID: eventID, Type: eventType, DeviceUUID: publisher.identity.DeviceUUID,
 		RecipientInstallationID: recipient.InstallationID,
-		OccurredAt:              message.Timestamp.UTC().Truncate(time.Millisecond), KeyEpoch: keyEpoch,
+		OccurredAt:              publisher.now().UTC().Truncate(time.Millisecond), KeyEpoch: keyEpoch,
 	}
 	payload, err := json.Marshal(Payload{
 		Version: protocolVersion, MessageID: message.ID, DeviceUUID: publisher.identity.DeviceUUID,

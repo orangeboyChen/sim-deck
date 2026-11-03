@@ -74,6 +74,9 @@ var _ = Describe("Incoming message publisher", func() {
 		}}
 		publisher, err = NewPublisher(remote, state)
 		Expect(err).NotTo(HaveOccurred())
+		publisher.now = func() time.Time {
+			return time.Date(2026, 10, 16, 12, 35, 0, 123456789, time.UTC)
+		}
 		message = sms.ReceivedMessage{
 			ID: messageID, Sender: "+8613500000000", Text: "你好 from EC20F", Segments: 2,
 			Timestamp: time.Date(2026, 10, 16, 12, 34, 56, 987654321, time.UTC),
@@ -97,17 +100,29 @@ var _ = Describe("Incoming message publisher", func() {
 		Expect(first.NumericID).To(Equal(2))
 		Expect(first.RemoteNumber).To(Equal("+8613500000000"))
 		Expect(first.Body).To(Equal("你好 from EC20F"))
+		Expect(first.ReceivedAt).To(Equal("2026-10-16T12:34:56.987654321Z"))
 		Expect(first.Segments).To(Equal(2))
 		Expect(firstInstallation).To(Equal("01900000-0000-7000-8000-000000000101"))
 		Expect(secondInstallation).To(Equal("01900000-0000-7000-8000-000000000102"))
 		for _, envelope := range remote.envelopes {
 			Expect(identity.ValidDeviceUUID(envelope.ID)).To(BeTrue())
 			Expect(envelope.Type).To(Equal("message.received"))
-			Expect(envelope.OccurredAt.Nanosecond()).To(Equal(987000000))
+			Expect(envelope.OccurredAt.Nanosecond()).To(Equal(123000000))
 			Expect(ed25519.Verify(state.PublicKey(), signedData(envelope), envelope.Signature)).To(BeTrue())
 			Expect(string(envelope.Ciphertext)).NotTo(ContainSubstring("13500000000"))
 			Expect(string(envelope.Ciphertext)).NotTo(ContainSubstring("EC20F"))
 		}
+	})
+
+	It("uploads a message with a future carrier timestamp using the event creation time", func() {
+		message.Timestamp = message.Timestamp.Add(time.Hour)
+		Expect(publisher.Publish(context.Background(), message)).To(Succeed())
+		Expect(remote.envelopes).To(HaveLen(2))
+		for _, envelope := range remote.envelopes {
+			Expect(envelope.OccurredAt).To(Equal(publisher.now().Truncate(time.Millisecond)))
+		}
+		first := openEnvelope(state, remote.envelopes[0], privateOne)
+		Expect(first.ReceivedAt).To(Equal("2026-10-16T13:34:56.987654321Z"))
 	})
 
 	It("cannot be opened by a different installation and detects tampering", func() {
