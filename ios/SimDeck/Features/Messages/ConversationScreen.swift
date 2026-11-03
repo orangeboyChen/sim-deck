@@ -153,8 +153,10 @@ struct ConversationScreen: View {
                 scrollToBottom(using: proxy)
             }
             .onChange(of: selectedLineID) { _, lineID in
-                if let lineID {
+                if let lineID, availableSendLines.contains(where: { $0.id == lineID }) {
                     sendLineID = lineID
+                } else {
+                    selectAvailableSendLineIfNeeded()
                 }
                 markVisibleConversationsRead()
                 messagePendingDeletion = nil
@@ -318,6 +320,8 @@ struct ConversationScreen: View {
             Text("This message will be removed from this conversation.")
         }
         .scrollEdgeEffectStyle(.soft, for: .all)
+        .task { selectAvailableSendLineIfNeeded() }
+        .onChange(of: lines) { selectAvailableSendLineIfNeeded() }
     }
 
     private var conversation: MessageConversation {
@@ -374,9 +378,13 @@ struct ConversationScreen: View {
     }
 
     private var availableSendLines: [DeviceLineIdentity] {
-        conversations.compactMap { conversation in
-            lines.first(where: { $0.id == conversation.lineID && $0.isOnline })
-        }
+        lines.filter(\.isOnline)
+    }
+
+    private func selectAvailableSendLineIfNeeded() {
+        guard !availableSendLines.contains(where: { $0.id == sendLineID }) else { return }
+        sendLineID = availableSendLines.first(where: { $0.id == defaultMessageLineID })?.id
+            ?? availableSendLines.first?.id
     }
 
     private var displayedContact: ContactRecord {
