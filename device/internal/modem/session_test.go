@@ -389,6 +389,20 @@ var _ = Describe("Modem session", func() {
 		Expect(iccid).To(Equal("8986000000000000000"))
 	})
 
+	It("normalizes an eSIM ICCID padded with a trailing F", func() {
+		session, modemTransport, client := newTestSession(MessageSinkFunc(func(context.Context, sms.ReceivedMessage) error { return nil }))
+		DeferCleanup(func() { _ = client.Close(); _ = modemTransport.Close() })
+		go func() {
+			reader := bufio.NewReader(modemTransport)
+			command, _ := reader.ReadString('\r')
+			Expect(strings.TrimSuffix(command, "\r")).To(Equal("AT+QCCID"))
+			_, _ = modemTransport.Write([]byte("+QCCID: 8986000000000000001F\r\nOK\r\n"))
+		}()
+		iccid, err := session.ReadSIMICCID(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(iccid).To(Equal("8986000000000000001"))
+	})
+
 	It("falls back to the generic ICCID command when the Quectel command is unavailable", func() {
 		session, modemTransport, client := newTestSession(MessageSinkFunc(func(context.Context, sms.ReceivedMessage) error { return nil }))
 		DeferCleanup(func() { _ = client.Close(); _ = modemTransport.Close() })

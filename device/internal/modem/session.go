@@ -856,6 +856,9 @@ func (session *Session) ReadSIMICCID(ctx context.Context) (string, error) {
 				value = strings.TrimSpace(strings.TrimPrefix(value, "+CCID:"))
 			}
 			value = strings.Trim(value, "\" ")
+			if strings.HasSuffix(strings.ToUpper(value), "F") {
+				value = value[:len(value)-1]
+			}
 			if len(value) >= 18 && len(value) <= 22 && allDigits(value) {
 				return value, nil
 			}
