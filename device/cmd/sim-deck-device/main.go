@@ -548,6 +548,22 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	}
 	var wifiMetrics *gateway.Metrics
 	var wifiCalls *route.Controller
+	invalidateIMS := func() {
+		if wifiMetrics == nil {
+			return
+		}
+		wifiMetrics.Invalidate()
+		if writeError := gateway.RequestRestart(config.StateDirectory); writeError != nil {
+			logger.Error("failed to request IMS companion restart after SIM identity change", "error", writeError)
+		}
+		if wifiCalls != nil {
+			go func() {
+				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = wifiCalls.InvalidateProfile(cleanup)
+			}()
+		}
+	}
 	if config.VoWiFiSIPRegistrar != "" {
 		wifiMetrics, err = gateway.NewMetrics(config.VoWiFiMetricsURL)
 		if err != nil {
@@ -562,19 +578,7 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 			status.SetWiFiCallingStatusProvider(wifiMetrics.Status)
 		}
 		if changes, ok := policy.(interface{ SetProfileChanged(func(string)) }); ok {
-			changes.SetProfileChanged(func(string) {
-				wifiMetrics.Invalidate()
-				if writeError := gateway.RequestRestart(config.StateDirectory); writeError != nil {
-					logger.Error("failed to request IMS companion restart after eSIM profile change", "error", writeError)
-				}
-				if wifiCalls != nil {
-					go func() {
-						cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-						defer cancel()
-						_ = wifiCalls.InvalidateProfile(cleanup)
-					}()
-				}
-			})
+			changes.SetProfileChanged(func(string) { invalidateIMS() })
 		}
 	}
 	inbox, err := dependencies.openInbox(
@@ -670,6 +674,9 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 		if fingerprintError != nil {
 			return fmt.Errorf("fingerprint eUICC identity: %w", fingerprintError)
 		}
+		if fingerprint != deviceIdentity.SIMFingerprint {
+			invalidateIMS()
+		}
 		deviceIdentity, err = identityStore.SetSIMFingerprint(deviceIdentity, fingerprint)
 		if err != nil {
 			return fmt.Errorf("persist eUICC identity fingerprint: %w", err)
@@ -684,12 +691,18 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 		if fingerprintError != nil {
 			return fmt.Errorf("fingerprint SIM identity: %w", fingerprintError)
 		}
+		if fingerprint != deviceIdentity.SIMFingerprint {
+			invalidateIMS()
+		}
 		deviceIdentity, err = identityStore.SetSIMFingerprint(deviceIdentity, fingerprint)
 		if err != nil {
 			return fmt.Errorf("persist SIM identity fingerprint: %w", err)
 		}
 		logger.Info("SIM card identity detected", "slot_key", deviceIdentity.SlotKey, "slot_index", deviceIdentity.SlotIndex)
 	} else {
+		if deviceIdentity.SIMFingerprint != "" {
+			invalidateIMS()
+		}
 		logger.Warn("SIM card identity is unavailable; using slot-local identity", "slot_key", deviceIdentity.SlotKey, "error", iccidError)
 	}
 	if err := dependencies.configureAudio(ctx, config, client); err != nil {
@@ -865,11 +878,11 @@ func runDevice(ctx context.Context, config agent.Config, logger *slog.Logger, re
 	}
 	if eSIMSupported {
 		go func() {
-			results <- synchronizeEUICCIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger)
+			results <- synchronizeEUICCIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger, invalidateIMS)
 		}()
 	} else {
 		go func() {
-			results <- synchronizeSIMIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger)
+			results <- synchronizeSIMIdentity(runContext, session, config, identityStore, deviceIdentity, dependencies.syncSIMIdentity, logger, invalidateIMS)
 		}()
 	}
 	first := <-results
@@ -935,6 +948,7 @@ func synchronizeSIMIdentity(
 	state identity.State,
 	synchronize func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error),
 	logger *slog.Logger,
+	onChange ...func(),
 ) error {
 	return synchronizeSIMIdentityWithFingerprint(ctx, session, config, store, state, synchronize, logger, func(ctx context.Context, current identity.State) (string, error) {
 		iccid, err := session.ReadSIMICCID(ctx)
@@ -942,7 +956,7 @@ func synchronizeSIMIdentity(
 			return "", err
 		}
 		return current.FingerprintSIM(iccid)
-	})
+	}, onChange...)
 }
 
 func readEUICCIdentifier(ctx context.Context, session deviceSession) (string, error) {
@@ -967,6 +981,7 @@ func synchronizeEUICCIdentity(
 	state identity.State,
 	synchronize func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error),
 	logger *slog.Logger,
+	onChange ...func(),
 ) error {
 	return synchronizeSIMIdentityWithFingerprint(ctx, session, config, store, state, synchronize, logger, func(ctx context.Context, current identity.State) (string, error) {
 		eid, err := readEUICCIdentifier(ctx, session)
@@ -974,7 +989,7 @@ func synchronizeEUICCIdentity(
 			return "", err
 		}
 		return current.FingerprintEUICC(eid)
-	})
+	}, onChange...)
 }
 
 func synchronizeSIMIdentityWithFingerprint(
@@ -986,6 +1001,7 @@ func synchronizeSIMIdentityWithFingerprint(
 	synchronize func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error),
 	logger *slog.Logger,
 	fingerprintIdentity func(context.Context, identity.State) (string, error),
+	onChange ...func(),
 ) error {
 	interval := config.RadioStatusPoll
 	if interval <= 0 {
@@ -994,6 +1010,13 @@ func synchronizeSIMIdentityWithFingerprint(
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	current := state
+	lastNotifiedFingerprint := ""
+	identityUnavailable := false
+	notifyChange := func() {
+		for _, notify := range onChange {
+			notify()
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1001,11 +1024,21 @@ func synchronizeSIMIdentityWithFingerprint(
 		case <-ticker.C:
 			fingerprint, err := fingerprintIdentity(ctx, current)
 			if err != nil {
+				if current.SIMFingerprint != "" && !identityUnavailable {
+					notifyChange()
+					identityUnavailable = true
+				}
 				logger.Warn("SIM identity poll failed", "slot_key", current.SlotKey, "error", err)
 				continue
 			}
+			identityUnavailable = false
 			if fingerprint == current.SIMFingerprint {
+				lastNotifiedFingerprint = ""
 				continue
+			}
+			if fingerprint != lastNotifiedFingerprint {
+				notifyChange()
+				lastNotifiedFingerprint = fingerprint
 			}
 			requestState := current
 			requestState.SIMFingerprint = fingerprint

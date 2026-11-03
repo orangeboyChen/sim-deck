@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -939,6 +940,29 @@ var _ = Describe("Device command runtime", func() {
 		Expect(bound).To(BeFalse())
 	})
 
+	It("restarts IMS when a physical SIM changed while the device was stopped", func() {
+		const oldICCID = "8986000000000000000"
+		const newICCID = "8986000000000000001"
+		config := testConfig(GinkgoT().TempDir())
+		config.SlotKey = "primary"
+		config.VoWiFiSIPRegistrar = "127.0.0.1:5060"
+		config.VoWiFiMetricsURL = "http://127.0.0.1:9091/metrics"
+		_, _ = configuredSIMIdentity(config.StateDirectory, oldICCID)
+		session := &fakeDeviceSession{readSIMICCID: func(context.Context) (string, error) {
+			return newICCID, nil
+		}}
+		dependencies := testDependencies(newBlockingTransport(), session)
+		dependencies.newMessageEvents = func(agent.Config, identity.State) (messageEventPublisher, error) {
+			return nil, errors.New("stop after IMS invalidation")
+		}
+
+		err := runDevice(context.Background(), config, logger, &atomic.Bool{}, dependencies)
+
+		Expect(err).To(MatchError("create encrypted message event publisher: stop after IMS invalidation"))
+		_, err = os.Stat(filepath.Join(config.StateDirectory, "ims-profile-generation"))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
 	It("keeps polling when the SIM card is unchanged and stops on cancellation", func() {
 		const iccid = "8986000000000000000"
 		store, state := configuredSIMIdentity(GinkgoT().TempDir(), iccid)
@@ -963,6 +987,55 @@ var _ = Describe("Device command runtime", func() {
 		cancel()
 		Eventually(result).Should(Receive(MatchError(context.Canceled)))
 		Expect(synchronizations.Load()).To(BeZero())
+	})
+
+	It("invalidates IMS before retrying a changed physical SIM assignment", func() {
+		store, state := configuredSIMIdentity(GinkgoT().TempDir(), "8986000000000000000")
+		config := testConfig(GinkgoT().TempDir())
+		session := &fakeDeviceSession{readSIMICCID: func(context.Context) (string, error) {
+			return "8986000000000000001", nil
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var invalidations atomic.Int32
+		var synchronizations atomic.Int32
+		result := make(chan error, 1)
+		go func() {
+			result <- synchronizeSIMIdentity(ctx, session, config, store, state,
+				func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error) {
+					Expect(invalidations.Load()).To(Equal(int32(1)))
+					if synchronizations.Add(1) == 3 {
+						cancel()
+					}
+					return serverapi.SIMAssignment{}, errors.New("server unavailable")
+				}, logger, func() { invalidations.Add(1) })
+		}()
+		Eventually(result).Should(Receive(MatchError(context.Canceled)))
+		Expect(invalidations.Load()).To(Equal(int32(1)))
+		Expect(synchronizations.Load()).To(Equal(int32(3)))
+	})
+
+	It("invalidates IMS once while the physical SIM identity is unreadable", func() {
+		store, state := configuredSIMIdentity(GinkgoT().TempDir(), "8986000000000000000")
+		config := testConfig(GinkgoT().TempDir())
+		var polls atomic.Int32
+		session := &fakeDeviceSession{readSIMICCID: func(context.Context) (string, error) {
+			polls.Add(1)
+			return "", errors.New("SIM removed")
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		var invalidations atomic.Int32
+		go func() {
+			result <- synchronizeSIMIdentity(ctx, session, config, store, state,
+				func(context.Context, agent.Config, identity.State) (serverapi.SIMAssignment, error) {
+					return serverapi.SIMAssignment{}, errors.New("unexpected synchronization")
+				}, logger, func() { invalidations.Add(1) })
+		}()
+		Eventually(polls.Load).Should(BeNumerically(">=", 3))
+		cancel()
+		Eventually(result).Should(Receive(MatchError(context.Canceled)))
+		Expect(invalidations.Load()).To(Equal(int32(1)))
 	})
 
 	It("uses the eUICC EID instead of the active profile ICCID when polling identity", func() {
