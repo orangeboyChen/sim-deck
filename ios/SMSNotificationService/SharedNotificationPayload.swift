@@ -88,7 +88,7 @@ enum NotificationPayloadDecoder {
 
     private static var decoder: JSONDecoder {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom(NotificationISO8601Date.decode)
         return decoder
     }
 
