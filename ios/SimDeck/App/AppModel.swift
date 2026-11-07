@@ -70,6 +70,7 @@ final class AppModel {
     @ObservationIgnored private var contactNameIndex = ContactNameIndex()
     @ObservationIgnored private var contactUpdatesTask: Task<Void, Never>?
     @ObservationIgnored private var networkPathObserver: NetworkPathObserver?
+    @ObservationIgnored private var sessionRenewalTask: Task<Void, Never>?
     @ObservationIgnored private let networkDiagnostics = ServerNetworkDiagnostics()
     @ObservationIgnored private var pendingMessageNotificationConversationIdentifier: String?
 
@@ -448,6 +449,20 @@ final class AppModel {
     func startRealtimeUpdates() {
         guard serverConnection.isSignedIn else { return }
         startMessageRealtimeUpdates()
+        guard sessionRenewalTask == nil else { return }
+        sessionRenewalTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let connection = self?.serverConnection else { return }
+                do {
+                    try await connection.renewSessionIfNeeded()
+                } catch {
+                    if !Task.isCancelled {
+                        connection.markRequestFailed(error)
+                    }
+                }
+                try? await Task.sleep(for: .seconds(5 * 60))
+            }
+        }
     }
 
     func startNetworkPathObservation() {
@@ -469,6 +484,8 @@ final class AppModel {
 
     func stopRealtimeUpdates() {
         stopMessageRealtimeUpdates()
+        sessionRenewalTask?.cancel()
+        sessionRenewalTask = nil
         isServerConnectionDegraded = false
         for task in deviceStatusExpiryTasks.values {
             task.cancel()
@@ -514,6 +531,13 @@ final class AppModel {
 
     func refreshForegroundState() async {
         refreshContactNames()
+        if serverConnection.isSignedIn {
+            do {
+                try await serverConnection.renewSessionIfNeeded()
+            } catch {
+                serverConnection.markRequestFailed(error)
+            }
+        }
         guard messageEventMonitor?.isRunning != true else { return }
         await refreshDevices()
         await refreshSIMCards()

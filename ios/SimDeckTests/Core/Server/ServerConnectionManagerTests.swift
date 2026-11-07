@@ -777,6 +777,76 @@ final class ServerConnectionManagerTests: XCTestCase {
         XCTAssertTrue(String(decoding: try XCTUnwrap(store.value), as: UTF8.self).contains("fresh-access"))
     }
 
+    func testRenewsSessionBeforeAccessTokenExpiresWithoutAnotherRequest() async throws {
+        let session = ServerSession(
+            accessToken: "old-access", refreshToken: "refresh-one",
+            accessExpiresAt: Date().addingTimeInterval(60),
+            refreshExpiresAt: Date().addingTimeInterval(30 * 24 * 60 * 60)
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let store = MemoryServerSessionStore(value: try encoder.encode(session))
+        let passkeyClient = FakePasskeyRPCClient()
+        let defaults = isolatedDefaults()
+        defaults.set("https://deck.example.test", forKey: "sim-deck.server-address.v1")
+        let manager = ServerConnectionManager(
+            network: ScriptedServerNetwork { _ in
+                XCTFail("Session renewal should only call the refresh RPC")
+                return Self.response(status: 500, body: "{}")
+            },
+            sessionStore: store,
+            defaults: defaults,
+            passkeyRPCClientFactory: FakePasskeyRPCClientFactory(client: passkeyClient)
+        )
+
+        try await manager.renewSessionIfNeeded()
+
+        XCTAssertEqual(passkeyClient.refreshToken, "refresh-one")
+        XCTAssertEqual(manager.accessToken, "fresh-access")
+        XCTAssertEqual(manager.state, .connected)
+    }
+
+    func testSignOutPreventsInFlightRefreshFromRestoringSession() async throws {
+        let session = ServerSession(
+            accessToken: "old-access", refreshToken: "refresh-one",
+            accessExpiresAt: Date().addingTimeInterval(60),
+            refreshExpiresAt: Date().addingTimeInterval(30 * 24 * 60 * 60)
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let store = MemoryServerSessionStore(value: try encoder.encode(session))
+        let refreshGate = AsyncRequestGate()
+        let refreshStarted = expectation(description: "Refresh request started")
+        let passkeyClient = FakePasskeyRPCClient()
+        passkeyClient.refreshHandler = { _ in
+            refreshStarted.fulfill()
+            await refreshGate.wait()
+            return passkeyClient.refreshedSession
+        }
+        let defaults = isolatedDefaults()
+        defaults.set("https://deck.example.test", forKey: "sim-deck.server-address.v1")
+        let manager = ServerConnectionManager(
+            network: ScriptedServerNetwork { _ in Self.response(status: 500, body: "{}") },
+            sessionStore: store,
+            defaults: defaults,
+            passkeyRPCClientFactory: FakePasskeyRPCClientFactory(client: passkeyClient)
+        )
+
+        let renewal = Task { try await manager.renewSessionIfNeeded() }
+        await fulfillment(of: [refreshStarted], timeout: 1)
+        try manager.signOut()
+        await refreshGate.open()
+
+        do {
+            try await renewal.value
+            XCTFail("A signed-out session must not be restored")
+        } catch {
+            XCTAssertEqual(error as? ServerConnectionError, .authenticationRequired)
+        }
+        XCTAssertFalse(manager.isSignedIn)
+        XCTAssertNil(store.value)
+    }
+
     func testConcurrentExpiredRequestsShareOneRefresh() async throws {
         let store = MemoryServerSessionStore(
             value: Data(Self.sessionJSON(

@@ -1454,6 +1454,14 @@ final class ServerConnectionManager {
         return try await refresh(baseURL: baseURL, session: session)
     }
 
+    func renewSessionIfNeeded() async throws {
+        guard let session else { throw ServerConnectionError.authenticationRequired }
+        guard session.accessExpiresAt <= Date().addingTimeInterval(5 * 60) else { return }
+        _ = try await refresh(baseURL: validatedBaseURL(), session: session)
+        state = .connected
+        lastErrorDescription = nil
+    }
+
     private func refresh(baseURL: URL, session: ServerSession) async throws -> ServerSession {
         if let currentSession = self.session,
            currentSession.refreshToken != session.refreshToken,
@@ -1477,6 +1485,9 @@ final class ServerConnectionManager {
         }
         let replacement = try await passkeyRPCClientFactory.makeClient(baseURL: baseURL)
             .refresh(refreshToken: session.refreshToken)
+        guard self.session?.refreshToken == session.refreshToken else {
+            throw ServerConnectionError.authenticationRequired
+        }
         try save(replacement)
         return replacement
     }
