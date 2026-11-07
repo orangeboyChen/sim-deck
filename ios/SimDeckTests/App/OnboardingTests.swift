@@ -69,6 +69,10 @@ private final class OnboardingStoreFake: OnboardingStoring {
     func markCompleted() {
         isCompleted = true
     }
+
+    func reset() {
+        isCompleted = false
+    }
 }
 
 private final class OnboardingSecureValueStore: SecureValueStoring, @unchecked Sendable {

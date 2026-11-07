@@ -217,6 +217,10 @@ struct ConversationRow: View {
 enum MessageConversationPinStore {
     private static let key = "message-pinned-conversations-v1"
 
+    static func clear(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: key)
+    }
+
     static func isPinned(
         _ conversationID: ConversationID,
         defaults: UserDefaults = .standard

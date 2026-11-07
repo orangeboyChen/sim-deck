@@ -187,5 +187,9 @@ private final class PreviewOnboardingStore: OnboardingStoring {
     func markCompleted() {
         isCompleted = true
     }
+
+    func reset() {
+        isCompleted = false
+    }
 }
 #endif

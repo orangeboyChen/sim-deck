@@ -6,6 +6,7 @@ import Foundation
 import Observation
 import OSLog
 import RelayProtocol
+import UserNotifications
 
 @MainActor
 @Observable
@@ -248,6 +249,9 @@ final class AppModel {
     }
 
     private func completeServerSignIn() async throws {
+        if installationIdentity == nil {
+            bootstrapInstallation()
+        }
         try await registerInstallationIfNeeded()
         devices = try await serverConnection.loadDevices(profileKey: recoveredVaultKey)
         reconcileLineHistory(using: devices)
@@ -263,6 +267,9 @@ final class AppModel {
         try? await voipPushCoordinator?.uploadPendingToken()
         try? await alertPushCoordinator?.uploadPendingToken()
         startRealtimeUpdates()
+        if isOnboardingPresented {
+            completeOnboarding()
+        }
     }
 
     func registerPasskey() async throws {
@@ -938,16 +945,18 @@ final class AppModel {
 
     func signOutFromServer() async throws {
         stopRealtimeUpdates()
+        try? await callCoordinator.endCall()
         await stopPushNotifications()
-        try serverConnection.signOut()
-        reconcileLineHistory(using: devices)
-        devices = []
-        managedSIMs = []
-        installationTrust = nil
+        try? await serverConnection.revokeCurrentSession()
+        let signOutResult = Result { try serverConnection.signOut() }
+        let cleanupResult = Result { try clearSignedOutState() }
+        try signOutResult.get()
+        try cleanupResult.get()
     }
 
     func revokeCurrentSession() async throws {
         stopRealtimeUpdates()
+        try? await callCoordinator.endCall()
         await stopPushNotifications()
         do {
             try await serverConnection.revokeCurrentSession()
@@ -957,12 +966,42 @@ final class AppModel {
             }
             throw error
         }
+        try clearSignedOutState()
+    }
+
+    private func clearSignedOutState() throws {
+        let historyDeletion = Result { try deleteEncryptedHistory() }
         devices = []
         managedSIMs = []
+        slotSettingsByLineID = [:]
         messages = .loaded([])
         callHistory = .loaded([])
+        passkeys = []
         installationTrust = nil
-        try deleteEncryptedHistory()
+        pendingExternalDialRequest = nil
+        pendingNavigationRequest = nil
+        pendingMessageNotificationConversationIdentifier = nil
+        lastSuccessfulDialLineID = nil
+        selectedTab = .calls
+        defaultCallLineID = nil
+        defaultMessageLineID = nil
+        recentCallLineStore.clear()
+        messageTransport.resetSequence()
+        commandSigner.identity = nil
+        installationIdentity = nil
+        recoveredVaultKey = nil
+        installationID = nil
+        pendingInstallationRevocationIDs = []
+        keyRecoveryState = .checking
+        contactNameIndex = ContactNameIndex()
+        callCoordinator.updateLineRoutes([])
+        messageTransport.updateLineRoutes([])
+        MessageConversationPinStore.clear()
+        MessageNotificationMuteStore.clear()
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        onboardingStore.reset()
+        isOnboardingPresented = true
+        try historyDeletion.get()
     }
 
     private func stopPushNotifications() async {

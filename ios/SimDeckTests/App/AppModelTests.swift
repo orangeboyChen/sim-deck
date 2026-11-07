@@ -146,12 +146,74 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(connection.state, .connected)
         XCTAssertEqual(model.devices.map(\.id), [deviceID])
         XCTAssertNotNil(sessionStore.storedValue)
+        XCTAssertFalse(model.isOnboardingPresented)
 
         try await model.signOutFromServer()
 
         XCTAssertEqual(connection.state, .disconnected)
         XCTAssertTrue(model.devices.isEmpty)
         XCTAssertNil(sessionStore.storedValue)
+        XCTAssertTrue(model.isOnboardingPresented)
+    }
+
+    @MainActor
+    func testSignOutRemovesLocalHistoryAndReturnsToWelcome() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "SimDeckSignOutTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let messageURL = directory.appending(path: "messages.bin")
+        let callURL = directory.appending(path: "calls.bin")
+        let messageStore = EncryptedMessageHistoryStore(fileURL: messageURL)
+        let callStore = EncryptedCallHistoryStore(fileURL: callURL)
+        let key = VaultKey.random()
+        let lineID = UUID()
+        let message = MessageItem(
+            id: UUID(), direction: .received, body: "private text", attachment: nil,
+            sentAt: .now, status: .delivered
+        )
+        let conversation = MessageConversation(
+            lineID: lineID, remoteNumber: "10086", contactName: nil,
+            unreadCount: 1, messages: [message]
+        )
+        let call = Self.callRecord()
+        try messageStore.save([conversation], using: key)
+        try callStore.save([call], using: key)
+        let defaults = UserDefaults(suiteName: "AppModelSignOutTests.\(UUID().uuidString)")!
+        defaults.set("https://deck.example.test", forKey: "sim-deck.server-address.v1")
+        let onboardingStore = UserDefaultsOnboardingStore(defaults: defaults)
+        onboardingStore.markCompleted()
+        let recentCalls = UserDefaultsRecentCallLineStore(defaults: defaults)
+        recentCalls.record(callID: call.id, remoteNumber: "10086", lineID: lineID)
+        let defaultLines = UserDefaultsDefaultLineStore(defaults: defaults)
+        let connection = ServerConnectionManager(
+            network: AppModelLogoutNetwork(),
+            sessionStore: AppModelSessionStore(value: Self.activeSession),
+            defaults: defaults,
+            passkeyRPCClientFactory: AppModelPasskeyRPCClientFactory()
+        )
+        let model = AppModel(
+            callHistory: .loaded([call]), messages: .loaded([conversation]),
+            defaultCallLineID: lineID, defaultMessageLineID: lineID,
+            selectedTab: .messages, serverConnection: connection,
+            defaultLineStore: defaultLines, recentCallLineStore: recentCalls,
+            onboardingStore: onboardingStore, messageHistoryStore: messageStore,
+            callHistoryStore: callStore, remoteDeviceRefreshEnabled: false
+        )
+
+        try await model.signOutFromServer()
+
+        XCTAssertFalse(connection.isSignedIn)
+        XCTAssertEqual(connection.address, "")
+        XCTAssertTrue(model.isOnboardingPresented)
+        XCTAssertFalse(onboardingStore.isCompleted)
+        XCTAssertEqual(model.messages, .loaded([]))
+        XCTAssertEqual(model.callHistory, .loaded([]))
+        XCTAssertEqual(model.selectedTab, .calls)
+        XCTAssertNil(model.defaultCallLineID)
+        XCTAssertNil(model.defaultMessageLineID)
+        XCTAssertNil(recentCalls.lineID(callRecordIdentifier: call.id.uuidString, remoteNumber: "10086"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: messageURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: callURL.path))
     }
 
     @MainActor

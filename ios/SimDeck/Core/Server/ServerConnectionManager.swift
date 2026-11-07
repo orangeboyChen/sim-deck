@@ -896,6 +896,9 @@ final class ServerConnectionManager {
     func signOut() throws {
         try sessionStore.delete()
         session = nil
+        deviceIdentityKeys.removeAll()
+        defaults.removeObject(forKey: Self.addressKey)
+        address = ""
         state = .disconnected
         lastErrorDescription = nil
     }

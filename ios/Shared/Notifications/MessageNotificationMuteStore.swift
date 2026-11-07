@@ -12,6 +12,10 @@ enum MessageNotificationMuteStore {
         UserDefaults(suiteName: appGroupIdentifier) ?? .standard
     }
 
+    static func clear(defaults: UserDefaults = sharedDefaults) {
+        defaults.removeObject(forKey: mutedConversationIdentifiersKey)
+    }
+
     static func isMuted(
         conversationIdentifier: String,
         defaults: UserDefaults = sharedDefaults

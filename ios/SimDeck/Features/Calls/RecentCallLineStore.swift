@@ -9,6 +9,11 @@ import Foundation
 protocol RecentCallLineStoring: AnyObject {
     func record(callID: UUID, remoteNumber: String, lineID: UUID)
     func lineID(callRecordIdentifier: String?, remoteNumber: String) -> UUID?
+    func clear()
+}
+
+extension RecentCallLineStoring {
+    func clear() {}
 }
 
 @MainActor
@@ -63,6 +68,10 @@ final class UserDefaultsRecentCallLineStore: RecentCallLineStoring {
         }
         guard let fingerprint = Self.fingerprint(for: remoteNumber) else { return nil }
         return entries.first(where: { $0.numberFingerprint == fingerprint })?.lineID
+    }
+
+    func clear() {
+        defaults.removeObject(forKey: Storage.key)
     }
 
     private func retainedEntries() -> [Entry] {

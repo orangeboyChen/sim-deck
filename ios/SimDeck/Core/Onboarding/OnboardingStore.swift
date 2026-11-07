@@ -8,6 +8,7 @@ import Foundation
 protocol OnboardingStoring: AnyObject {
     var isCompleted: Bool { get }
     func markCompleted()
+    func reset()
 }
 @MainActor
 final class UserDefaultsOnboardingStore: OnboardingStoring {
@@ -28,5 +29,9 @@ final class UserDefaultsOnboardingStore: OnboardingStoring {
 
     func markCompleted() {
         defaults.set(true, forKey: key)
+    }
+
+    func reset() {
+        defaults.removeObject(forKey: key)
     }
 }
