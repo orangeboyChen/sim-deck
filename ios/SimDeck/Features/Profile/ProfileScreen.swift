@@ -15,6 +15,8 @@ struct ProfileScreen: View {
     let model: AppModel
 
     var body: some View {
+        let lines = model.devices.filter { $0.simID != nil }
+
         List {
             if !model.serverConnection.isSignedIn {
                 Section {
@@ -37,19 +39,34 @@ struct ProfileScreen: View {
                 }
             }
 
-            SIMCardsSection(
-                model: model,
-                lines: model.devices.filter { $0.simID != nil },
-                serviceStates: model.slotSettingsByLineID
-            )
-
             Section {
-                NavigationLink(value: ProfileNavigationRoute.deviceManagement) {
-                    Label("Device Management", systemImage: "simcard.2")
-                }
-                NavigationLink(value: ProfileNavigationRoute.settings) {
-                    Label("Settings", systemImage: "gearshape")
-                }
+                ProfileOverviewCard(lines: lines)
+                    .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 2, trailing: 20))
+                    .listRowBackground(Color.clear)
+            }
+
+            if !lines.isEmpty {
+                SIMCardsSection(
+                    lines: lines,
+                    serviceStates: model.slotSettingsByLineID
+                )
+            }
+
+            Section("Manage") {
+                ProfileActionLink(
+                    title: "Device Management",
+                    subtitle: "Pair and manage devices",
+                    systemImage: "simcard.2",
+                    color: .blue,
+                    route: .deviceManagement
+                )
+                ProfileActionLink(
+                    title: "Settings",
+                    subtitle: "Security, notifications, and more",
+                    systemImage: "gearshape",
+                    color: .purple,
+                    route: .settings
+                )
             }
         }
         .refreshable {
@@ -57,70 +74,149 @@ struct ProfileScreen: View {
         }
         .scrollEdgeEffectStyle(.soft, for: .all)
     }
+}
 
+private struct ProfileOverviewCard: View {
+    let lines: [DeviceLineIdentity]
+
+    private var onlineCount: Int {
+        lines.count(where: \.isOnline)
+    }
+
+    var body: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                if lines.isEmpty {
+                    Text("No SIM Cards")
+                        .font(.title3.weight(.semibold))
+                    Text("Add a device in Device Management.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Online SIM Cards")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text(onlineCount, format: .number)
+                            .foregroundStyle(onlineCount > 0 ? .primary : .secondary)
+                        Text("/ \(lines.count)")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.system(.largeTitle, design: .rounded, weight: .semibold))
+                    .accessibilityLabel(Text("\(onlineCount) of \(lines.count) SIM cards online"))
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Image(systemName: lines.isEmpty ? "simcard" : "simcard.2.fill")
+                .font(.system(size: 27, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 58, height: 58)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+                .accessibilityHidden(true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(Color.accentColor.opacity(0.10))
+        }
+    }
+}
+
+private struct ProfileActionLink: View {
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey
+    let systemImage: String
+    let color: Color
+    let route: ProfileNavigationRoute
+
+    var body: some View {
+        NavigationLink(value: route) {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(color)
+                    .frame(width: 36, height: 36)
+                    .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.body.weight(.medium))
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 3)
+        }
+    }
 }
 
 private struct SIMCardsSection: View {
-    let model: AppModel
     let lines: [DeviceLineIdentity]
     let serviceStates: [UUID: SlotSettings]
 
     var body: some View {
         Section("SIM Cards") {
-            if lines.isEmpty {
-                EmptySIMCardsRow()
-            } else {
-                ForEach(lines) { line in
-                    NavigationLink(value: ProfileNavigationRoute.sim(line.id)) {
-                        SIMRadioStatusRow(
-                            line: line,
-                            serviceState: serviceStates[line.id]
-                        )
-                    }
+            ForEach(lines) { line in
+                NavigationLink(value: ProfileNavigationRoute.sim(line.id)) {
+                    SIMRadioStatusRow(
+                        line: line,
+                        serviceState: serviceStates[line.id]
+                    )
                 }
             }
         }
     }
 }
 
-private struct EmptySIMCardsRow: View {
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "simcard")
-                .foregroundStyle(.secondary)
-                .frame(width: 22)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("No SIM Cards")
-                Text("Add a device in Device Management.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
 struct SIMRadioStatusRow: View {
     let line: DeviceLineIdentity
     let serviceState: SlotSettings?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        HStack(spacing: 12) {
-            SIMLineDescription(line: line, serviceState: serviceState)
-            Spacer(minLength: 12)
-            SIMRadioStatusSummary(
-                isOnline: line.isOnline,
-                status: line.radioStatus
-            )
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                HStack(alignment: .top, spacing: 12) {
+                    ProfileSIMBadge(line: line)
+                    VStack(alignment: .leading, spacing: 8) {
+                        SIMLineDescription(line: line, serviceState: serviceState)
+                        SIMRadioStatusSummary(
+                            isOnline: line.isOnline,
+                            status: line.radioStatus
+                        )
+                    }
+                }
+            } else {
+                HStack(spacing: 12) {
+                    ProfileSIMBadge(line: line)
+                    SIMLineDescription(line: line, serviceState: serviceState)
+                    Spacer(minLength: 6)
+                    SIMRadioStatusSummary(
+                        isOnline: line.isOnline,
+                        status: line.radioStatus
+                    )
+                }
+            }
         }
-        .frame(minHeight: 44)
+        .frame(minHeight: 56)
+        .padding(.vertical, 5)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
     }
 
     private var accessibilityLabel: Text {
-        Text(
+        if !line.lineName.isEmpty && line.lineName != line.displayName {
+            return Text(
+                "SIM \(line.numericID), \(line.displayName), \(line.lineName), \(servicePresentation.title), \(line.radioAccessibilityDescription)"
+            )
+        }
+        return Text(
             "SIM \(line.numericID), \(line.displayName), \(servicePresentation.title), \(line.radioAccessibilityDescription)"
         )
     }
@@ -130,13 +226,35 @@ struct SIMRadioStatusRow: View {
     }
 }
 
+private struct ProfileSIMBadge: View {
+    let line: DeviceLineIdentity
+
+    var body: some View {
+        SIMBadge(line: line, size: 22, color: line.isOnline ? .blue : .secondary)
+            .frame(width: 38, height: 38)
+            .background(
+                line.isOnline ? Color.blue.opacity(0.10) : Color.secondary.opacity(0.10),
+                in: RoundedRectangle(cornerRadius: 11)
+            )
+            .accessibilityHidden(true)
+    }
+}
+
 private struct SIMLineDescription: View {
     let line: DeviceLineIdentity
     let serviceState: SlotSettings?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            SIMLabel(line: line, size: 22)
+            Text(line.displayName)
+                .font(.body.weight(.semibold))
+                .lineLimit(2)
+            if !line.lineName.isEmpty && line.lineName != line.displayName {
+                Text(line.lineName)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             ProfileSIMServiceStatus(
                 presentation: ProfileSIMServicePresentation(
                     line: line,

@@ -102,6 +102,16 @@
         }
       }
     },
+    "%lld of %lld SIM cards online" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 张在线，共 %2$lld 张 SIM 卡"
+          }
+        }
+      }
+    },
     "%lld phone numbers" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1952,6 +1962,16 @@
         }
       }
     },
+    "Manage" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理"
+          }
+        }
+      }
+    },
     "Manage the cellular profiles installed on this eSIM." : {
 
     },
@@ -2461,6 +2481,16 @@
         }
       }
     },
+    "Online SIM Cards" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在线 SIM 卡"
+          }
+        }
+      }
+    },
     "Online, signal unavailable" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2590,6 +2620,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请在设备管理中配对设备。"
+          }
+        }
+      }
+    },
+    "Pair and manage devices" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对和管理设备"
           }
         }
       }
@@ -3052,6 +3092,16 @@
         }
       }
     },
+    "Security, notifications, and more" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安全、通知及更多设置"
+          }
+        }
+      }
+    },
     "Security" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3334,6 +3384,22 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "SIM %1$lld, %2$@, %3$@, %4$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SIM %1$lld，%2$@，%3$@，%4$@"
+          }
+        }
+      }
+    },
+    "SIM %lld, %@, %@, %@, %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SIM %1$lld，%2$@，%3$@，%4$@，%5$@"
           }
         }
       }
