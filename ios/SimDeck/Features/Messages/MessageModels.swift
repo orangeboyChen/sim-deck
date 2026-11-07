@@ -78,10 +78,19 @@ struct MessageConversation: Identifiable, Equatable, Sendable, Codable {
     }
 
     func lineAlternatives(in conversations: [MessageConversation]) -> [MessageConversation] {
-        let normalizedRemoteNumber = DialString.normalized(remoteNumber)
+        let normalizedRemoteNumber = Self.numberKey(remoteNumber)
         return conversations.filter {
-            DialString.normalized($0.remoteNumber) == normalizedRemoteNumber
+            Self.numberKey($0.remoteNumber) == normalizedRemoteNumber
         }
+    }
+
+    static func numberKey(_ number: String) -> String {
+        let normalized = DialString.normalized(number)
+        if normalized.hasPrefix("+86"), normalized.count == 14,
+           normalized.dropFirst(3).first == "1" {
+            return String(normalized.dropFirst(3))
+        }
+        return normalized
     }
 
     func matches(_ query: String) -> Bool {
@@ -91,6 +100,52 @@ struct MessageConversation: Identifiable, Equatable, Sendable, Codable {
         return displayName.localizedCaseInsensitiveContains(normalizedQuery)
             || remoteNumber.localizedCaseInsensitiveContains(normalizedQuery)
             || messages.contains { $0.body.localizedCaseInsensitiveContains(normalizedQuery) }
+    }
+}
+
+struct MessageConversationListGroup: Identifiable {
+    let members: [MessageConversation]
+
+    var id: ConversationID { members[0].id }
+    var conversationIDs: [ConversationID] { members.map(\.id) }
+
+    var summary: MessageConversation {
+        let latest = members.max {
+            ($0.lastMessage?.sentAt ?? .distantPast) < ($1.lastMessage?.sentAt ?? .distantPast)
+        } ?? members[0]
+        return MessageConversation(
+            lineID: members[0].lineID,
+            lineSnapshot: latest.lineSnapshot,
+            remoteNumber: members[0].remoteNumber,
+            contactName: members.compactMap(\.contactName).first,
+            unreadCount: members.reduce(0) { $0 + $1.unreadCount },
+            messages: members.flatMap(\.messages).sorted { $0.sentAt < $1.sentAt }
+        )
+    }
+
+    var latestConversation: MessageConversation {
+        members.max {
+            ($0.lastMessage?.sentAt ?? .distantPast) < ($1.lastMessage?.sentAt ?? .distantPast)
+        } ?? members[0]
+    }
+
+    static func group(_ conversations: [MessageConversation]) -> [Self] {
+        var groups: [Self] = []
+        var indices: [String: Int] = [:]
+        for conversation in conversations {
+            let key = MessageConversation.numberKey(conversation.remoteNumber)
+            if let index = indices[key] {
+                groups[index] = Self(members: groups[index].members + [conversation])
+            } else {
+                indices[key] = groups.count
+                groups.append(Self(members: [conversation]))
+            }
+        }
+        return groups.map { group in
+            Self(members: group.members.sorted {
+                $0.lineID.uuidString < $1.lineID.uuidString
+            })
+        }
     }
 }
 

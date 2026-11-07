@@ -170,12 +170,12 @@ struct MessagesScreen: View {
                 }
             } else {
                 List(selection: editMode.isEditing ? $selectedConversationIDs : nil) {
-                    ForEach(filtered) { conversation in
+                    ForEach(filtered) { group in
                         conversationRow(
-                            conversation,
-                            contact: contactIndex.contact(for: conversation.remoteNumber)
+                            group,
+                            contact: contactIndex.contact(for: group.summary.remoteNumber)
                         )
-                            .tag(conversation.id)
+                            .tag(group.id)
                             .listRowInsets(
                                 EdgeInsets(top: 0, leading: 26, bottom: 0, trailing: 16)
                             )
@@ -194,28 +194,29 @@ struct MessagesScreen: View {
 
     @ViewBuilder
     private func conversationRow(
-        _ conversation: MessageConversation,
+        _ group: MessageConversationListGroup,
         contact: ContactRecord?
     ) -> some View {
+        let conversation = group.summary
         if editMode.isEditing {
             ConversationRow(
                 conversation: conversation,
-                linePresentation: conversation.linePresentation(in: lines),
+                linePresentation: group.latestConversation.linePresentation(in: lines),
                 contact: contact,
                 referenceDate: referenceDate,
-                isMuted: mutedConversationIDs.contains(conversation.id),
+                isMuted: mutedConversationIDs.contains(group.id),
                 isEditing: true
             )
             .contentShape(.rect)
         } else {
-            NavigationLink(value: conversation.id) {
+            NavigationLink(value: group.id) {
                 ConversationRow(
                     conversation: conversation,
-                    linePresentation: conversation.linePresentation(in: lines),
+                    linePresentation: group.latestConversation.linePresentation(in: lines),
                     contact: contact,
                     referenceDate: referenceDate,
-                    isMuted: mutedConversationIDs.contains(conversation.id),
-                    isPinned: pinnedConversationIDs.contains(conversation.id),
+                    isMuted: mutedConversationIDs.contains(group.id),
+                    isPinned: pinnedConversationIDs.contains(group.id),
                     isEditing: false
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -226,7 +227,7 @@ struct MessagesScreen: View {
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                 if conversation.unreadCount > 0 {
                     Button {
-                        markReadAction(conversation.id)
+                        group.conversationIDs.forEach(markReadAction)
                     } label: {
                         Image(systemName: "message.badge.filled.fill")
                     }
@@ -234,7 +235,7 @@ struct MessagesScreen: View {
                     .accessibilityLabel("Read")
                 } else {
                     Button {
-                        markUnreadAction(conversation.id)
+                        group.conversationIDs.forEach(markUnreadAction)
                     } label: {
                         Image(systemName: "message.badge.filled.fill")
                     }
@@ -244,15 +245,15 @@ struct MessagesScreen: View {
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 Button(role: .destructive) {
-                    conversationsPendingDeletion = [conversation]
+                    conversationsPendingDeletion = group.members
                 } label: {
                     Image(systemName: "trash")
                 }
                 .accessibilityLabel("Delete")
 
-                let isMuted = mutedConversationIDs.contains(conversation.id)
+                let isMuted = mutedConversationIDs.contains(group.id)
                 Button {
-                    setConversationMuted(!isMuted, id: conversation.id)
+                    setConversationMuted(!isMuted, group: group)
                 } label: {
                     Image(systemName: isMuted ? "bell.fill" : "bell.slash.fill")
                 }
@@ -261,11 +262,11 @@ struct MessagesScreen: View {
             }
             .contextMenu {
                 Button {
-                    togglePinned(conversation.id)
+                    togglePinned(group)
                 } label: {
                     Label(
-                        pinnedConversationIDs.contains(conversation.id) ? "Unpin" : "Pin",
-                        systemImage: pinnedConversationIDs.contains(conversation.id)
+                        pinnedConversationIDs.contains(group.id) ? "Unpin" : "Pin",
+                        systemImage: pinnedConversationIDs.contains(group.id)
                             ? "pin.slash"
                             : "pin"
                     )
@@ -273,21 +274,21 @@ struct MessagesScreen: View {
 
                 if conversation.unreadCount > 0 {
                     Button {
-                        markReadAction(conversation.id)
+                        group.conversationIDs.forEach(markReadAction)
                     } label: {
                         Label("Mark as Read", systemImage: "message.badge.filled.fill")
                     }
                 } else {
                     Button {
-                        markUnreadAction(conversation.id)
+                        group.conversationIDs.forEach(markUnreadAction)
                     } label: {
                         Label("Mark as Unread", systemImage: "message.badge.filled.fill")
                     }
                 }
 
-                let isMuted = mutedConversationIDs.contains(conversation.id)
+                let isMuted = mutedConversationIDs.contains(group.id)
                 Button {
-                    setConversationMuted(!isMuted, id: conversation.id)
+                    setConversationMuted(!isMuted, group: group)
                 } label: {
                     Label(
                         isMuted ? "Show Alerts" : "Hide Alerts",
@@ -298,7 +299,7 @@ struct MessagesScreen: View {
                 Divider()
 
                 Button(role: .destructive) {
-                    conversationsPendingDeletion = [conversation]
+                    conversationsPendingDeletion = group.members
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
@@ -316,10 +317,7 @@ struct MessagesScreen: View {
             .disabled(!canPerformSelectionReadAction)
         } trailing: {
             Button(role: .destructive) {
-                guard case .loaded(let conversations) = state else { return }
-                conversationsPendingDeletion = conversations.filter {
-                    selectedConversationIDs.contains($0.id)
-                }
+                conversationsPendingDeletion = selectedConversations.flatMap(\.members)
             } label: {
                 Image(systemName: "trash")
             }
@@ -331,57 +329,58 @@ struct MessagesScreen: View {
 
     private var allConversationIDs: Set<ConversationID> {
         guard case .loaded(let conversations) = state else { return [] }
-        return Set(conversations.map(\.id))
+        return Set(MessageConversationListGroup.group(conversations).map(\.id))
     }
 
-    private var visibleConversations: [MessageConversation] {
+    private var visibleConversations: [MessageConversationListGroup] {
         guard case .loaded(let conversations) = state else { return [] }
         return filteredConversations(conversations)
     }
 
-    private var selectedConversations: [MessageConversation] {
+    private var selectedConversations: [MessageConversationListGroup] {
         visibleConversations.filter { selectedConversationIDs.contains($0.id) }
     }
 
     private var selectionReadActionTitle: LocalizedStringKey {
         guard !selectedConversationIDs.isEmpty else { return "Read All" }
-        return selectedConversations.contains(where: { $0.unreadCount > 0 })
+        return selectedConversations.contains(where: { $0.summary.unreadCount > 0 })
             ? "Read"
             : "Unread"
     }
 
     private var canPerformSelectionReadAction: Bool {
         if selectedConversationIDs.isEmpty {
-            return visibleConversations.contains(where: { $0.unreadCount > 0 })
+            return visibleConversations.contains(where: { $0.summary.unreadCount > 0 })
         }
         return !selectedConversations.isEmpty
     }
 
     private func performSelectionReadAction() {
         if selectedConversationIDs.isEmpty {
-            for conversation in visibleConversations where conversation.unreadCount > 0 {
-                markReadAction(conversation.id)
+            for group in visibleConversations where group.summary.unreadCount > 0 {
+                group.conversationIDs.forEach(markReadAction)
             }
             return
         }
 
         let conversations = selectedConversations
-        let marksRead = conversations.contains(where: { $0.unreadCount > 0 })
-        for conversation in conversations {
+        let marksRead = conversations.contains(where: { $0.summary.unreadCount > 0 })
+        for group in conversations {
             if marksRead {
-                markReadAction(conversation.id)
+                group.conversationIDs.forEach(markReadAction)
             } else {
-                markUnreadAction(conversation.id)
+                group.conversationIDs.forEach(markUnreadAction)
             }
         }
     }
 
     private func filteredConversations(
         _ conversations: [MessageConversation]
-    ) -> [MessageConversation] {
-        conversations.filter { conversation in
-            (selectedLineID == nil || conversation.lineID == selectedLineID)
-                && conversation.matches(searchText)
+    ) -> [MessageConversationListGroup] {
+        MessageConversationListGroup.group(
+            conversations.filter { selectedLineID == nil || $0.lineID == selectedLineID }
+        ).filter { group in
+            group.members.contains { $0.matches(searchText) }
         }
         .enumerated()
         .sorted { lhs, rhs in
@@ -398,9 +397,9 @@ struct MessagesScreen: View {
             mutedConversationIDs = []
             return
         }
-        mutedConversationIDs = Set(
-            conversations.lazy.filter { isMutedAction($0.id) }.map(\.id)
-        )
+        mutedConversationIDs = Set(MessageConversationListGroup.group(conversations).compactMap { group in
+            group.members.contains { isMutedAction($0.id) } ? group.id : nil
+        })
     }
 
     private func synchronizePinnedConversations() {
@@ -408,29 +407,31 @@ struct MessagesScreen: View {
             pinnedConversationIDs = []
             return
         }
-        pinnedConversationIDs = Set(
-            conversations.lazy.filter { MessageConversationPinStore.isPinned($0.id) }.map(\.id)
-        )
+        pinnedConversationIDs = Set(MessageConversationListGroup.group(conversations).compactMap { group in
+            group.members.contains { MessageConversationPinStore.isPinned($0.id) } ? group.id : nil
+        })
     }
 
-    private func togglePinned(_ id: ConversationID) {
-        let isPinned = !pinnedConversationIDs.contains(id)
-        MessageConversationPinStore.setPinned(isPinned, conversationID: id)
+    private func togglePinned(_ group: MessageConversationListGroup) {
+        let isPinned = !pinnedConversationIDs.contains(group.id)
+        for id in group.conversationIDs {
+            MessageConversationPinStore.setPinned(isPinned, conversationID: id)
+        }
         withAnimation(.snappy) {
             if isPinned {
-                pinnedConversationIDs.insert(id)
+                pinnedConversationIDs.insert(group.id)
             } else {
-                pinnedConversationIDs.remove(id)
+                pinnedConversationIDs.remove(group.id)
             }
         }
     }
 
-    private func setConversationMuted(_ isMuted: Bool, id: ConversationID) {
-        setMutedAction(id, isMuted)
+    private func setConversationMuted(_ isMuted: Bool, group: MessageConversationListGroup) {
+        group.conversationIDs.forEach { setMutedAction($0, isMuted) }
         if isMuted {
-            mutedConversationIDs.insert(id)
+            mutedConversationIDs.insert(group.id)
         } else {
-            mutedConversationIDs.remove(id)
+            mutedConversationIDs.remove(group.id)
         }
     }
 
