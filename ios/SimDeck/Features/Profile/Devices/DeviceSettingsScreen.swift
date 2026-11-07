@@ -37,6 +37,14 @@ struct DeviceSettingsScreen: View {
     var body: some View {
         Form {
             Section {
+                ProfilePageHeader(
+                    title: "Device Identity",
+                    detail: "Name this modem so you can recognize it across your devices.",
+                    symbol: "externaldrive.badge.gearshape",
+                    color: .blue
+                )
+            }
+            Section {
                 TextField("Device name", text: $draft.deviceName)
                     .textContentType(.name)
             } header: {
@@ -163,6 +171,14 @@ struct SIMSettingsScreen: View {
 
     var body: some View {
         Form {
+            Section {
+                ProfilePageHeader(
+                    title: "SIM Card",
+                    detail: "Edit this line and control its modem slot.",
+                    symbol: line.simKind == .eSIM ? "simcard.2" : "simcard",
+                    color: .teal
+                )
+            }
             Section("SIM Card") {
                 Stepper(value: $numericID, in: 1...99) {
                     LabeledContent("SIM ID", value: numericID, format: .number)
@@ -179,7 +195,10 @@ struct SIMSettingsScreen: View {
                     NavigationLink {
                         ESIMManagementScreen(model: model, line: line)
                     } label: {
-                        Label("eSIM Configuration", systemImage: "simcard.2")
+                        HStack(spacing: 12) {
+                            ProfileIconTile(symbol: "simcard.2", color: .teal)
+                            Text("eSIM Configuration")
+                        }
                     }
                 } footer: {
                     Text("Manage the cellular profiles installed on this eSIM.")
@@ -208,7 +227,14 @@ struct SIMSettingsScreen: View {
                 }
             }
             Section("MMS") {
-                NavigationLink("MMS Configuration") { MMSSettingsScreen() }
+                NavigationLink {
+                    MMSSettingsScreen()
+                } label: {
+                    HStack(spacing: 12) {
+                        ProfileIconTile(symbol: "photo.on.rectangle.angled", color: .purple)
+                        Text("MMS Configuration")
+                    }
+                }
             }
         }
         .navigationTitle("SIM Card")
@@ -319,14 +345,19 @@ struct MMSSettingsScreen: View {
 
     var body: some View {
         Form {
-            TextField("APN", text: $apn)
-            TextField("MMSC", text: $mmsc)
-                .textInputAutocapitalization(.never)
-            TextField("Proxy", text: $proxy)
-                .textInputAutocapitalization(.never)
-            Stepper("Size limit: \(sizeLimit) KB", value: $sizeLimit, in: 128...10_240, step: 128)
+            Section("Network") {
+                TextField("APN", text: $apn)
+                TextField("MMSC", text: $mmsc)
+                    .textInputAutocapitalization(.never)
+                TextField("Proxy", text: $proxy)
+                    .textInputAutocapitalization(.never)
+            }
+            Section("Media") {
+                Stepper("Size limit: \(sizeLimit) KB", value: $sizeLimit, in: 128...10_240, step: 128)
+            }
         }
         .navigationTitle("MMS Configuration")
+        .navigationBarTitleDisplayMode(.inline)
         .scrollEdgeEffectStyle(.soft, for: .all)
     }
 }

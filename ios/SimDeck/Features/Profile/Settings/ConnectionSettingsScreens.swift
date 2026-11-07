@@ -13,6 +13,14 @@ struct ServerSettingsScreen: View {
         Group {
             if model.serverConnection.isSignedIn {
                 Form {
+                    Section {
+                        ProfilePageHeader(
+                            title: "Server Connection",
+                            detail: "Manage this iPhone's connection to your server.",
+                            symbol: "server.rack",
+                            color: .blue
+                        )
+                    }
                     ServerSignedInSection(model: model)
                     ServerVersionSection()
                 }
@@ -21,6 +29,7 @@ struct ServerSettingsScreen: View {
             }
         }
         .navigationTitle("Server")
+        .navigationBarTitleDisplayMode(.inline)
         .scrollEdgeEffectStyle(.soft, for: .all)
     }
 }
@@ -149,7 +158,7 @@ private struct ServerSignInContent: View {
                 }
             }
             .frame(maxWidth: 520)
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 20)
             .padding(.top, 32)
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity)
@@ -242,11 +251,15 @@ private struct ServerSignedInSection: View {
                 Task { await testConnection() }
             }
             .disabled(isWorking)
+        }
 
+        Section {
             Button("Sign Out", role: .destructive) {
                 Task { await signOut() }
             }
             .disabled(isWorking)
+        } footer: {
+            Text("Signing out removes local messages and calls from this iPhone.")
         }
 
         if let actionResult {
@@ -376,18 +389,27 @@ struct DefaultLineSettingsScreen: View {
 
     var body: some View {
         Form {
-            LinePickerRow(
-                "Default call SIM",
-                lines: model.devices,
-                selection: $model.defaultCallLineID
-            )
-            LinePickerRow(
-                "Default message SIM",
-                lines: model.devices,
-                selection: $model.defaultMessageLineID
-            )
+            Section("Calls") {
+                LinePickerRow(
+                    "Default call SIM",
+                    lines: model.devices,
+                    selection: $model.defaultCallLineID
+                )
+            }
+            Section {
+                LinePickerRow(
+                    "Default message SIM",
+                    lines: model.devices,
+                    selection: $model.defaultMessageLineID
+                )
+            } header: {
+                Text("Messages")
+            } footer: {
+                Text("Choose which SIM is selected first for calls and messages.")
+            }
         }
         .navigationTitle("Default Lines")
+        .navigationBarTitleDisplayMode(.inline)
         .scrollEdgeEffectStyle(.soft, for: .all)
     }
 }
@@ -420,29 +442,39 @@ struct NotificationSettingsScreen: View {
 
     var body: some View {
         Form {
-            Toggle("Message notifications", isOn: Binding(
-                get: { messageNotifications },
-                set: { value in
-                    messageNotifications = value
-                    NotificationCenter.default.post(
-                        name: .simDeckMessageNotificationPreferenceChanged,
-                        object: value
-                    )
-                }
-            ))
-            Toggle("Incoming call notifications", isOn: Binding(
-                get: { incomingCallNotifications },
-                set: { value in
-                    incomingCallNotifications = value
-                    NotificationCenter.default.post(
-                        name: .simDeckIncomingCallPreferenceChanged,
-                        object: value
-                    )
-                }
-            ))
-            Toggle("Show message preview", isOn: $showMessagePreview)
+            Section {
+                Toggle("Message notifications", isOn: Binding(
+                    get: { messageNotifications },
+                    set: { value in
+                        messageNotifications = value
+                        NotificationCenter.default.post(
+                            name: .simDeckMessageNotificationPreferenceChanged,
+                            object: value
+                        )
+                    }
+                ))
+                Toggle("Show message preview", isOn: $showMessagePreview)
+                    .disabled(!messageNotifications)
+            } header: {
+                Text("Messages")
+            } footer: {
+                Text("Message previews show message content in notifications.")
+            }
+            Section("Calls") {
+                Toggle("Incoming call notifications", isOn: Binding(
+                    get: { incomingCallNotifications },
+                    set: { value in
+                        incomingCallNotifications = value
+                        NotificationCenter.default.post(
+                            name: .simDeckIncomingCallPreferenceChanged,
+                            object: value
+                        )
+                    }
+                ))
+            }
         }
         .navigationTitle("Notifications")
+        .navigationBarTitleDisplayMode(.inline)
         .scrollEdgeEffectStyle(.soft, for: .all)
     }
 }
@@ -453,22 +485,31 @@ struct ContactsSettingsScreen: View {
 
     var body: some View {
         Form {
-            LabeledContent("Permission", value: statusLabel)
-            if authorizationStatus == .notDetermined {
-                Button {
-                    requestAccess()
-                } label: {
-                    if isRequesting { ProgressView() } else { Text("Allow Contacts Access") }
+            Section {
+                LabeledContent("Access") {
+                    Text(statusLabel)
                 }
-                .disabled(isRequesting)
+                if authorizationStatus == .notDetermined {
+                    Button {
+                        requestAccess()
+                    } label: {
+                        if isRequesting { ProgressView() } else { Text("Allow Contacts Access") }
+                    }
+                    .disabled(isRequesting)
+                }
+                Link("Open System Settings", destination: URL(string: UIApplication.openSettingsURLString)!)
+            } header: {
+                Text("Permission")
+            } footer: {
+                Text("Show names from this iPhone in calls and messages.")
             }
-            Link("Open System Settings", destination: URL(string: UIApplication.openSettingsURLString)!)
         }
         .navigationTitle("Contacts")
+        .navigationBarTitleDisplayMode(.inline)
         .scrollEdgeEffectStyle(.soft, for: .all)
     }
 
-    private var statusLabel: String {
+    private var statusLabel: LocalizedStringResource {
         switch authorizationStatus {
         case .authorized: "Allowed"
         case .denied, .restricted: "Denied"

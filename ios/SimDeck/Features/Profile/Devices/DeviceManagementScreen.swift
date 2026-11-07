@@ -17,12 +17,24 @@ struct DeviceManagementScreen: View {
                 }
             } else {
                 List {
+                    Section {
+                        ProfilePageHeader(
+                            title: "Connected Devices",
+                            detail: "Manage each modem and its SIM slots.",
+                            symbol: "externaldrive.connected.to.line.below",
+                            color: .blue
+                        )
+                    }
                     ForEach(DeviceGroup.groups(from: model.devices)) { group in
                         Section {
                             NavigationLink {
                                 DeviceSettingsScreen(model: model, line: group.lines[0])
                             } label: {
-                                Label("Device Settings", systemImage: "externaldrive.badge.gearshape")
+                                HStack(spacing: 12) {
+                                    ProfileIconTile(symbol: "gearshape", color: .blue)
+                                    Text("Device Settings")
+                                        .font(.body.weight(.medium))
+                                }
                             }
                             ForEach(group.lines) { line in
                                 DeviceSlotListRow(model: model, line: line)
@@ -38,6 +50,7 @@ struct DeviceManagementScreen: View {
             }
         }
         .navigationTitle("Device Management")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -106,9 +119,10 @@ private struct DeviceGroupHeaderStatus: View {
     let group: DeviceGroup
 
     var body: some View {
-        Text(group.lines.contains(where: \.isOnline) ? String(localized: "Online") : String(localized: "Offline"))
-            .font(.caption)
-            .foregroundStyle(group.lines.contains(where: \.isOnline) ? .green : .secondary)
+        ProfileStatusPill(
+            title: group.lines.contains(where: \.isOnline) ? "Online" : "Offline",
+            color: group.lines.contains(where: \.isOnline) ? .green : .gray
+        )
     }
 }
 
@@ -136,11 +150,7 @@ private struct DeviceSlotRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            if line.simID == nil {
-                Image(systemName: "simcard")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22, height: 22)
-            }
+            ProfileIconTile(symbol: line.simID == nil ? "simcard" : "simcard.fill", color: line.simID == nil ? .gray : .teal)
             VStack(alignment: .leading, spacing: 3) {
                 Text(line.slotIndex.map { String(localized: "Slot \($0)") } ?? String(localized: "Slot"))
                     .font(.subheadline.weight(.semibold))
@@ -156,6 +166,8 @@ private struct DeviceSlotRow: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Spacer(minLength: 8)
+            ProfileStatusPill(title: line.isOnline ? "Online" : "Offline", color: line.isOnline ? .green : .gray)
         }
         .frame(minHeight: 44)
         .accessibilityElement(children: .combine)

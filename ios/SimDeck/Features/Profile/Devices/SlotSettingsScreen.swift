@@ -27,6 +27,14 @@ struct SlotSettingsScreen: View {
 
     var body: some View {
         Form {
+            Section {
+                ProfilePageHeader(
+                    title: "Modem Slot",
+                    detail: "Control this slot and its mobile data connection.",
+                    symbol: "simcard",
+                    color: .teal
+                )
+            }
             SlotIdentitySection(line: line)
             if let settings {
                 SlotControlSection(settings: binding(for: settings))

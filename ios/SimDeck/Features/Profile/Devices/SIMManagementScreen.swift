@@ -15,6 +15,14 @@ struct SIMManagementScreen: View {
             if model.managedSIMs.isEmpty {
                 ContentUnavailableView("No SIM Cards", systemImage: "simcard", description: Text("SIM cards appear after a modem reports its ICCID."))
             } else {
+                Section {
+                    ProfilePageHeader(
+                        title: "SIM Cards",
+                        detail: "Review SIMs linked to your account and their device status.",
+                        symbol: "simcard.2",
+                        color: .green
+                    )
+                }
                 Section("SIM Cards") {
                     ForEach(model.managedSIMs) { sim in
                         managedSIMRow(sim)
@@ -90,6 +98,7 @@ private struct ManagedSIMRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            ProfileIconTile(symbol: "simcard.fill", color: sim.isOffline ? .gray : .green)
             VStack(alignment: .leading, spacing: 3) {
                 SIMLabel(
                     number: sim.numericID,
@@ -105,9 +114,7 @@ private struct ManagedSIMRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Image(systemName: sim.isOffline ? "wifi.slash" : "checkmark.circle.fill")
-                .foregroundStyle(sim.isOffline ? AnyShapeStyle(.secondary) : AnyShapeStyle(.green))
-                .accessibilityHidden(true)
+            ProfileStatusPill(title: sim.isOffline ? "Offline" : "Online", color: sim.isOffline ? .gray : .green)
             if let delete {
                 Button(role: .destructive, action: delete) {
                     Image(systemName: "trash")

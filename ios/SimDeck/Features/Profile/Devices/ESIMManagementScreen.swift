@@ -31,6 +31,14 @@ struct ESIMManagementScreen: View {
             } else {
                 List {
                     Section {
+                        ProfilePageHeader(
+                            title: "Cellular Plans",
+                            detail: "Choose the plan used by this eSIM line.",
+                            symbol: "simcard.2",
+                            color: .teal
+                        )
+                    }
+                    Section {
                         ForEach(profiles) { profile in
                             NavigationLink {
                                 ESIMProfileDetailScreen(
@@ -123,11 +131,7 @@ private struct ESIMProfileRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "simcard.2")
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.tint)
-                .font(.title3)
-                .accessibilityHidden(true)
+            ProfileIconTile(symbol: "simcard.2", color: profile.isEnabled ? .teal : .gray)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(profile.displayName)
@@ -141,9 +145,7 @@ private struct ESIMProfileRow: View {
 
             Spacer(minLength: 8)
 
-            Text(profile.isEnabled ? "On" : "Off")
-                .font(.subheadline)
-                .foregroundStyle(profile.isEnabled ? .green : .secondary)
+            ProfileStatusPill(title: profile.isEnabled ? "On" : "Off", color: profile.isEnabled ? .green : .gray)
         }
         .frame(minHeight: 48)
         .accessibilityElement(children: .combine)
@@ -181,6 +183,14 @@ private struct ESIMProfileDetailScreen: View {
 
     var body: some View {
         Form {
+            Section {
+                ProfilePageHeader(
+                    title: "Cellular Plan",
+                    detail: "Manage this plan and review its SIM identity.",
+                    symbol: "simcard.2",
+                    color: .teal
+                )
+            }
             Section("Cellular Plan") {
                 Toggle("Turn On This Line", isOn: Binding(
                     get: { profile.isEnabled },
@@ -315,6 +325,14 @@ private struct ESIMAddProfileSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    ProfilePageHeader(
+                        title: "Add Cellular Plan",
+                        detail: "Scan your carrier's QR code or enter its activation code.",
+                        symbol: "qrcode.viewfinder",
+                        color: .teal
+                    )
+                }
                 Section("Add Cellular Plan") {
                     Button {
                         method = .scan

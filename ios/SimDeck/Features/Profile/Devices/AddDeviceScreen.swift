@@ -21,6 +21,14 @@ struct AddDeviceScreen: View {
 
         NavigationStack {
             Form {
+                Section {
+                    ProfilePageHeader(
+                        title: "Pair a Modem",
+                        detail: "Enable discovery, then verify the device before allowing it.",
+                        symbol: "antenna.radiowaves.left.and.right",
+                        color: .blue
+                    )
+                }
                 DeviceDiscoveryControlSection(
                     isEnabled: $discovery.isDiscoveryEnabled,
                     isChanging: discovery.isChangingDiscovery,
@@ -229,10 +237,7 @@ private struct DiscoveredDeviceRow: View {
             select()
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: "simcard")
-                    .font(.title2)
-                    .foregroundStyle(.tint)
-                    .frame(width: 32)
+                ProfileIconTile(symbol: "simcard", color: .blue)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("New SIM Device")
                         .foregroundStyle(.primary)
