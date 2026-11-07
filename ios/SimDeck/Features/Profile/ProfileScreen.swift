@@ -41,7 +41,7 @@ struct ProfileScreen: View {
 
             Section {
                 ProfileOverviewCard(lines: lines)
-                    .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 2, trailing: 20))
+                    .listRowInsets(EdgeInsets(top: 12, leading: 0, bottom: 2, trailing: 0))
                     .listRowBackground(Color.clear)
             }
 
