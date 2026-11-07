@@ -9,40 +9,28 @@ struct SettingsScreen: View {
 
     var body: some View {
         List {
-            Section("Account") {
+            Section("Connection & Lines") {
                 SettingsLink("Server", subtitle: "Connection and sign-in", symbol: "server.rack", color: .blue) {
                     ServerSettingsScreen(model: model)
                 }
-                SettingsLink("Security", subtitle: "Passkeys and recovery", symbol: "lock.shield", color: .orange) {
-                    SecuritySettingsScreen(model: model)
-                }
-            }
-
-            Section("Communication") {
-                SettingsLink("Default Lines", subtitle: "Choose SIMs for calls and messages", symbol: "simcard.2", color: .teal) {
-                    DefaultLineSettingsScreen(model: model)
-                }
-                SettingsLink("Notifications", subtitle: "Calls and message alerts", symbol: "bell", color: .blue) {
-                    NotificationSettingsScreen()
-                }
-                SettingsLink("Contacts", subtitle: "Contact access", symbol: "person.crop.circle", color: .teal) {
-                    ContactsSettingsScreen()
-                }
-            }
-
-            Section("SIM Cards") {
                 SettingsLink("All SIM Cards", subtitle: "Manage paired SIMs", symbol: "simcard", color: .green) {
                     SIMManagementScreen(model: model)
                 }
+                SettingsLink("Calls & Messages", subtitle: "Default lines, alerts, and contacts", symbol: "phone.bubble", color: .teal) {
+                    CallsAndMessagesSettingsScreen(model: model)
+                }
             }
 
-            Section("Data") {
+            Section("Privacy & Storage") {
+                SettingsLink("Security", subtitle: "Passkeys and recovery", symbol: "lock.shield", color: .orange) {
+                    SecuritySettingsScreen(model: model)
+                }
                 SettingsLink("Messages & Storage", subtitle: "Encrypted history and cache", symbol: "externaldrive", color: .indigo) {
                     StorageSettingsScreen(model: model)
                 }
             }
 
-            Section("Other") {
+            Section("App") {
                 SettingsLink("Advanced", subtitle: "Connection diagnostics", symbol: "gearshape.2", color: .gray) {
                     AdvancedSettingsScreen(connection: model.serverConnection)
                 }

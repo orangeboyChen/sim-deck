@@ -384,8 +384,11 @@ struct ServerConnectionStatusRow: View {
     }
 }
 
-struct DefaultLineSettingsScreen: View {
+struct CallsAndMessagesSettingsScreen: View {
     @Bindable var model: AppModel
+    @AppStorage(NotificationPreferences.messageNotificationsKey, store: NotificationPreferences.sharedDefaults) private var messageNotifications = true
+    @AppStorage(NotificationPreferences.incomingCallNotificationsKey, store: NotificationPreferences.sharedDefaults) private var incomingCallNotifications = true
+    @AppStorage(NotificationPreferences.showMessagePreviewKey, store: NotificationPreferences.sharedDefaults) private var showMessagePreview = true
 
     var body: some View {
         Form {
@@ -395,6 +398,16 @@ struct DefaultLineSettingsScreen: View {
                     lines: model.devices,
                     selection: $model.defaultCallLineID
                 )
+                Toggle("Incoming call notifications", isOn: Binding(
+                    get: { incomingCallNotifications },
+                    set: { value in
+                        incomingCallNotifications = value
+                        NotificationCenter.default.post(
+                            name: .simDeckIncomingCallPreferenceChanged,
+                            object: value
+                        )
+                    }
+                ))
             }
             Section {
                 LinePickerRow(
@@ -402,47 +415,6 @@ struct DefaultLineSettingsScreen: View {
                     lines: model.devices,
                     selection: $model.defaultMessageLineID
                 )
-            } header: {
-                Text("Messages")
-            } footer: {
-                Text("Choose which SIM is selected first for calls and messages.")
-            }
-        }
-        .navigationTitle("Default Lines")
-        .navigationBarTitleDisplayMode(.inline)
-        .scrollEdgeEffectStyle(.soft, for: .all)
-    }
-}
-
-private struct LinePickerRow: View {
-    let title: LocalizedStringKey
-    let lines: [DeviceLineIdentity]
-    @Binding var selection: UUID?
-
-    init(_ title: LocalizedStringKey, lines: [DeviceLineIdentity], selection: Binding<UUID?>) {
-        self.title = title
-        self.lines = lines
-        _selection = selection
-    }
-
-    var body: some View {
-        Picker(title, selection: $selection) {
-            Text("Automatic").tag(UUID?.none)
-            ForEach(lines) { line in
-                Text(line.displayName).tag(Optional(line.id))
-            }
-        }
-    }
-}
-
-struct NotificationSettingsScreen: View {
-    @AppStorage(NotificationPreferences.messageNotificationsKey, store: NotificationPreferences.sharedDefaults) private var messageNotifications = true
-    @AppStorage(NotificationPreferences.incomingCallNotificationsKey, store: NotificationPreferences.sharedDefaults) private var incomingCallNotifications = true
-    @AppStorage(NotificationPreferences.showMessagePreviewKey, store: NotificationPreferences.sharedDefaults) private var showMessagePreview = true
-
-    var body: some View {
-        Form {
-            Section {
                 Toggle("Message notifications", isOn: Binding(
                     get: { messageNotifications },
                     set: { value in
@@ -460,22 +432,55 @@ struct NotificationSettingsScreen: View {
             } footer: {
                 Text("Message previews show message content in notifications.")
             }
-            Section("Calls") {
-                Toggle("Incoming call notifications", isOn: Binding(
-                    get: { incomingCallNotifications },
-                    set: { value in
-                        incomingCallNotifications = value
-                        NotificationCenter.default.post(
-                            name: .simDeckIncomingCallPreferenceChanged,
-                            object: value
-                        )
+            Section {
+                NavigationLink {
+                    ContactsSettingsScreen()
+                } label: {
+                    HStack(spacing: 12) {
+                        ProfileIconTile(symbol: "person.crop.circle", color: .teal)
+                        Text("Contact Access")
                     }
-                ))
+                }
+            } header: {
+                Text("Contacts")
+            } footer: {
+                Text("Show names from this iPhone in calls and messages.")
             }
         }
-        .navigationTitle("Notifications")
+        .navigationTitle("Calls & Messages")
         .navigationBarTitleDisplayMode(.inline)
         .scrollEdgeEffectStyle(.soft, for: .all)
+    }
+}
+
+private struct LinePickerRow: View {
+    let title: LocalizedStringKey
+    let lines: [DeviceLineIdentity]
+    @Binding var selection: UUID?
+
+    init(_ title: LocalizedStringKey, lines: [DeviceLineIdentity], selection: Binding<UUID?>) {
+        self.title = title
+        self.lines = lines
+        _selection = selection
+    }
+
+    var body: some View {
+        Picker(title, selection: availableSelection) {
+            Text("Automatic").tag(UUID?.none)
+            ForEach(lines) { line in
+                Text(line.displayName).tag(Optional(line.id))
+            }
+        }
+    }
+
+    private var availableSelection: Binding<UUID?> {
+        Binding(
+            get: {
+                guard let selection, lines.contains(where: { $0.id == selection }) else { return nil }
+                return selection
+            },
+            set: { selection = $0 }
+        )
     }
 }
 
@@ -534,12 +539,8 @@ struct ContactsSettingsScreen: View {
     NavigationStack { ServerSettingsScreen(model: .preview(selectedTab: .profile)) }
 }
 
-#Preview("Default Lines") {
-    NavigationStack { DefaultLineSettingsScreen(model: .preview(selectedTab: .profile)) }
-}
-
-#Preview("Notification Settings") {
-    NavigationStack { NotificationSettingsScreen() }
+#Preview("Calls and Messages") {
+    NavigationStack { CallsAndMessagesSettingsScreen(model: .preview(selectedTab: .profile)) }
 }
 
 #Preview("Contacts Settings") {
