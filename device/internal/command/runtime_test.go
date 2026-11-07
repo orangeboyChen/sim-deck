@@ -200,16 +200,18 @@ type fakeSMSOnlyMessages struct{}
 func (fakeSMSOnlyMessages) SendSMS(context.Context, string, string, byte) error { return nil }
 
 type fakeESIMProfiles struct {
-	profiles  []ESIMProfile
-	operation string
-	profileID string
-	name      string
-	err       error
+	profiles         []ESIMProfile
+	operation        string
+	profileID        string
+	name             string
+	confirmationCode string
+	err              error
 }
 
-func (profiles *fakeESIMProfiles) DownloadESIMProfile(_ context.Context, activationCode string) error {
+func (profiles *fakeESIMProfiles) DownloadESIMProfile(_ context.Context, activationCode, confirmationCode string) error {
 	profiles.operation = "download"
 	profiles.name = activationCode
+	profiles.confirmationCode = confirmationCode
 	return profiles.err
 }
 
@@ -388,6 +390,14 @@ var _ = Describe("Encrypted command runtime", func() {
 		Expect(result.esimProfiles).NotTo(BeNil())
 		Expect(profiles.operation).To(Equal("download"))
 		Expect(profiles.name).To(Equal("LPA:1$example.test$matching-id"))
+
+		_, err = runtime.execute(context.Background(), Payload{
+			Version: 1, Operation: "esim.download", SlotID: state.SlotID, SIMID: state.SIMID,
+			ESIMActivationCode:   "LPA:1$example.test$matching-id",
+			ESIMConfirmationCode: "123456",
+		}, testInstallationID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(profiles.confirmationCode).To(Equal("123456"))
 	})
 
 	It("returns an encrypted modem error for a rejected SMS", func() {

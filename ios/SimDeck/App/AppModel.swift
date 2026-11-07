@@ -898,8 +898,8 @@ final class AppModel {
         try await esimProfileManager.delete(profile: profile, line: line)
     }
 
-    func addESIMActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> ESIMProfile {
-        try await esimProfileManager.addActivationCode(code, line: line)
+    func addESIMActivationCode(_ code: String, confirmationCode: String?, line: DeviceLineIdentity) async throws -> ESIMProfile {
+        try await esimProfileManager.addActivationCode(code, confirmationCode: confirmationCode, line: line)
     }
 
     func removeDevice(line: DeviceLineIdentity) async throws {

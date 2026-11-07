@@ -125,7 +125,7 @@ protocol ESIMProfileManaging: AnyObject {
     func setEnabled(_ enabled: Bool, profile: ESIMProfile, line: DeviceLineIdentity) async throws -> ESIMProfile
     func rename(_ name: String, profile: ESIMProfile, line: DeviceLineIdentity) async throws -> ESIMProfile
     func delete(profile: ESIMProfile, line: DeviceLineIdentity) async throws
-    func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> ESIMProfile
+    func addActivationCode(_ code: String, confirmationCode: String?, line: DeviceLineIdentity) async throws -> ESIMProfile
 }
 
 @MainActor
@@ -148,7 +148,7 @@ extension ServerConnectionManager: ESIMProfileMetadataStore {}
 @MainActor
 protocol ESIMDeviceProfileTransport: AnyObject {
     func list(line: DeviceLineIdentity) async throws -> [DeviceESIMProfile]
-    func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> [DeviceESIMProfile]
+    func addActivationCode(_ code: String, confirmationCode: String?, line: DeviceLineIdentity) async throws -> [DeviceESIMProfile]
     func setEnabled(_ enabled: Bool, profileID: String, line: DeviceLineIdentity) async throws
     func rename(_ name: String, profileID: String, line: DeviceLineIdentity) async throws
     func delete(profileID: String, line: DeviceLineIdentity) async throws
@@ -185,12 +185,13 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
         return result.esimProfiles ?? []
     }
 
-    func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] {
+    func addActivationCode(_ code: String, confirmationCode: String?, line: DeviceLineIdentity) async throws -> [DeviceESIMProfile] {
         let result = try await execute(
             operation: "esim.download",
             profileID: nil,
             name: nil,
             activationCode: code.trimmingCharacters(in: .whitespacesAndNewlines),
+            confirmationCode: confirmationCode?.trimmingCharacters(in: .whitespacesAndNewlines),
             line: line
         )
         return result.esimProfiles ?? []
@@ -213,6 +214,7 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
         profileID: String?,
         name: String?,
         activationCode: String? = nil,
+        confirmationCode: String? = nil,
         line: DeviceLineIdentity
     ) async throws -> CallCommandResult {
         guard commandSigner.identity != nil else {
@@ -230,7 +232,8 @@ final class LiveESIMDeviceProfileTransport: ESIMDeviceProfileTransport {
             simID: target.simID,
             profileID: profileID,
             name: name,
-            activationCode: activationCode
+            activationCode: activationCode,
+            confirmationCode: confirmationCode
         )
         let sealed: SealedCallCommand
         do {
@@ -284,6 +287,7 @@ private struct ESIMCommandPayload: Codable, Sendable {
     let profileID: String?
     let name: String?
     let activationCode: String?
+    let confirmationCode: String?
 
     enum CodingKeys: String, CodingKey {
         case version
@@ -293,6 +297,7 @@ private struct ESIMCommandPayload: Codable, Sendable {
         case profileID = "esim_profile_id"
         case name = "esim_profile_name"
         case activationCode = "esim_activation_code"
+        case confirmationCode = "esim_confirmation_code"
     }
 }
 
@@ -315,7 +320,7 @@ final class UnavailableESIMProfileManager: ESIMProfileManaging {
         throw ESIMProfileManagerError.unsupported
     }
 
-    func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> ESIMProfile {
+    func addActivationCode(_ code: String, confirmationCode: String?, line: DeviceLineIdentity) async throws -> ESIMProfile {
         throw ESIMProfileManagerError.unsupported
     }
 }
@@ -384,14 +389,14 @@ final class LiveESIMProfileManager: ESIMProfileManaging {
         try await metadataStore.deleteESIMProfile(simID: simID, profileID: profile.profileID)
     }
 
-    func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> ESIMProfile {
+    func addActivationCode(_ code: String, confirmationCode: String?, line: DeviceLineIdentity) async throws -> ESIMProfile {
         let simID = try requireSIMID(line)
         let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCode.isEmpty else {
             throw ESIMProfileManagerError.invalidActivationCode
         }
         let before = try await device.list(line: line)
-        let after = try await device.addActivationCode(trimmedCode, line: line)
+        let after = try await device.addActivationCode(trimmedCode, confirmationCode: confirmationCode, line: line)
         let installed = after.first { candidate in
             !before.contains { $0.profileID == candidate.profileID }
         } ?? after.last

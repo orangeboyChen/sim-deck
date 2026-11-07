@@ -151,7 +151,7 @@ private final class PreviewESIMProfileManager: ESIMProfileManaging {
         profiles.removeAll { $0.id == profile.id }
     }
 
-    func addActivationCode(_ code: String, line: DeviceLineIdentity) async throws -> ESIMProfile {
+    func addActivationCode(_ code: String, confirmationCode: String?, line: DeviceLineIdentity) async throws -> ESIMProfile {
         let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCode.isEmpty else { throw ESIMProfileManagerError.invalidActivationCode }
         let profile = ESIMProfile(

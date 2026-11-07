@@ -1226,6 +1226,16 @@
         }
       }
     },
+    "Choose QR Code from Photos" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从相册选择二维码"
+          }
+        }
+      }
+    },
     "Choose contact" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1318,6 +1328,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "核对 UUID 和指纹，然后轻点“允许”。"
+          }
+        }
+      }
+    },
+    "Confirmation Code" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认码"
           }
         }
       }
@@ -2038,6 +2058,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "输入运营商提供的激活码。"
+          }
+        }
+      }
+    },
+    "Enter the confirmation code if your carrier provided one." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果运营商提供了确认码，请在此输入。"
           }
         }
       }
@@ -2807,6 +2837,16 @@
         }
       }
     },
+    "No eSIM QR code was found in the selected photo." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选照片中未找到 eSIM 二维码。"
+          }
+        }
+      }
+    },
     "No eSIM Profiles" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3139,6 +3179,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "运营商"
+          }
+        }
+      }
+    },
+    "Optional" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可选"
           }
         }
       }

@@ -111,6 +111,20 @@ var _ = Describe("Modem session", func() {
 		Expect(manual).To(Equal("LPA:1$prod.smdp-plus.rsp.goog$3TD6-8L82-HUE1-LVN6"))
 	})
 
+	It("adds the optional confirmation code to the QESIM download command", func() {
+		code := "LPA:1$example.test$synthetic-code"
+		withoutConfirmation, err := esimDownloadCommand(code, "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(withoutConfirmation).To(Equal(`AT+QESIM="download","LPA:1$example.test$synthetic-code"`))
+
+		withConfirmation, err := esimDownloadCommand(code, " 123456 ")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(withConfirmation).To(Equal(`AT+QESIM="download","LPA:1$example.test$synthetic-code","123456"`))
+
+		_, err = esimDownloadCommand(code, "123\rAT+QESIM")
+		Expect(err).To(MatchError("invalid eSIM confirmation code"))
+	})
+
 	It("extracts the SMDP+ host from a normalized activation code", func() {
 		host, err := smdpHostFromActivationCode("LPA:1$smdp.example.test$MATCHING-CODE")
 		Expect(err).NotTo(HaveOccurred())
