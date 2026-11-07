@@ -260,6 +260,20 @@ var _ = Describe("PostgreSQL integration", Ordered, func() {
 		Expect(database.RotateSession(context.Background(), first.RefreshToken, newPair(), now)).To(MatchError(pgx.ErrNoRows))
 	})
 
+	It("rejects malformed owner tokens without revoking a valid session", func() {
+		owner := createOwner()
+		pair := newPair()
+		Expect(database.CreateSession(context.Background(), owner.ID, pair)).To(Succeed())
+
+		_, err := database.AuthenticateOwnerSession(context.Background(), "invalid-token", now)
+		Expect(err).To(MatchError(auth.ErrInvalidToken))
+		Expect(database.RevokeSession(context.Background(), "invalid-token", now)).To(MatchError(auth.ErrInvalidToken))
+
+		ownerID, err := database.AuthenticateOwnerSession(context.Background(), pair.AccessToken, now)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ownerID).To(Equal(owner.ID))
+	})
+
 	It("approves only the first app installation and makes retries idempotent", func() {
 		owner := createOwner()
 		first := AppInstallationRegistration{
@@ -1372,6 +1386,32 @@ var _ = Describe("PostgreSQL integration", Ordered, func() {
 		Expect(inserted).To(BeTrue())
 		_, err = database.ClaimPushJob(context.Background(), deliveryNow.Add(3*time.Second), time.Minute)
 		Expect(errors.Is(err, pgx.ErrNoRows)).To(BeTrue())
+	})
+
+	It("does not persist an SMS alert for a revoked installation", func() {
+		owner := createOwner()
+		installation := AppInstallationRegistration{
+			ID:                    "01900000-0000-7000-8000-000000000101",
+			IdentityPublicKey:     bytes.Repeat([]byte{9}, ed25519.PublicKeySize),
+			KeyAgreementPublicKey: bytes.Repeat([]byte{10}, 32),
+		}
+		_, _, err := database.RegisterAppInstallation(context.Background(), owner.ID, installation, now)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(database.db.Model(&appInstallationModel{}).Where("id = ?", installation.ID).
+			Update("revoked_at", now).Error).To(Succeed())
+		device := createDevice(firstDeviceID)
+		event := domain.EventEnvelope{
+			ID: "01900000-0000-7000-8000-000000000013", Type: "message.received",
+			DeviceUUID: device.ID, RecipientInstallationID: installation.ID,
+			OccurredAt: now, KeyEpoch: 1, Nonce: bytes.Repeat([]byte{1}, 12),
+			Ciphertext: []byte("opaque SMS"), Signature: bytes.Repeat([]byte{2}, ed25519.SignatureSize),
+		}
+		_, inserted, err := database.InsertEvent(context.Background(), event, now.Add(time.Hour))
+		Expect(err).To(MatchError(ContainSubstring("SMS event recipient installation is not approved")))
+		Expect(inserted).To(BeFalse())
+		var events int64
+		Expect(database.db.Model(&eventModel{}).Count(&events).Error).To(Succeed())
+		Expect(events).To(BeZero())
 	})
 
 	It("atomically stores incoming call ciphertexts and one VoIP outbox job per approved recipient", func() {
