@@ -153,7 +153,7 @@ enum NotificationPayloadDecoder {
         if let recipient = envelope.recipientInstallationID {
             data.appendLengthPrefixed(Data(recipient.uuidString.lowercased().utf8))
         }
-        let nanoseconds = Int64((envelope.occurredAt.timeIntervalSince1970 * 1_000_000_000).rounded())
+        let nanoseconds = NotificationISO8601Date.signedNanoseconds(envelope.occurredAt)
         data.appendBigEndian(UInt64(bitPattern: nanoseconds))
         data.appendBigEndian(UInt64(envelope.keyEpoch))
         return data

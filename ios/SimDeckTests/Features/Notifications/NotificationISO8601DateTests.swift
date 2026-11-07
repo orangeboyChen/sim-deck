@@ -19,6 +19,10 @@ final class NotificationISO8601DateTests: XCTestCase {
             from: Data(#"{"occurredAt":"2026-11-07T08:09:10.123Z"}"#.utf8)
         )
         XCTAssertEqual(timestamp.occurredAt.timeIntervalSince1970, 1_794_038_950.123, accuracy: 0.001)
+        XCTAssertEqual(
+            NotificationISO8601Date.signedNanoseconds(timestamp.occurredAt),
+            1_794_038_950_123_000_000
+        )
     }
 
     func testDecodesWholeSecondTimestamp() throws {

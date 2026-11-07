@@ -18,4 +18,9 @@ enum NotificationISO8601Date {
             debugDescription: "Invalid ISO 8601 notification timestamp"
         )
     }
+
+    static func signedNanoseconds(_ date: Date) -> Int64 {
+        let milliseconds = Int64((date.timeIntervalSince1970 * 1_000).rounded())
+        return milliseconds * 1_000_000
+    }
 }
